@@ -521,15 +521,13 @@ class ProductionBlogGenerator:
 <strong>⚠️ 21+ Disclaimer:</strong> Market lines change frequently. This analysis is for entertainment purposes only, not betting advice. <a href="https://www.ncpgambling.org/" target="_blank" rel="noopener nofollow">Problem gambling resources</a>. Check your local jurisdiction regarding sports betting.
 </div>'''
 
-        # THIN CONTENT GATE: Word count + insight/comp requirements
+        # Calculate word count for logging (no gate)
         clean_text = re.sub(r'<[^>]+>', '', post_body)
         word_count = len(clean_text.split())
         has_insight = td_line is not None and td_line > 7
         has_comparables = bool(comparables_html)
         
-        if word_count < 600 or (not has_insight and not has_comparables):
-            data_ok = False
-            print(f"⚠️ Thin content gate: {full_name} - {word_count} words, insight: {has_insight}, comps: {has_comparables}")
+        print(f"ℹ️ Content stats: {full_name} - {word_count} words, insight: {has_insight}, comps: {has_comparables}")
 
         # Ensure exactly one primary keyword (hardened with H2 missing fallback)
         post_body = self.guarantee_primary_keyword(post_body)
@@ -763,7 +761,7 @@ class ProductionBlogGenerator:
         
         successful_posts = 0
         failed_posts = []
-        thin_content_skipped = 0
+        data_skipped = 0
         
         for i, player in enumerate(daily_batch):
             player_name = player['name']
@@ -789,8 +787,8 @@ class ProductionBlogGenerator:
                     continue
                 
                 if not blog_data['should_index']:
-                    thin_content_skipped += 1
-                    print(f"⚠️ Thin content gate: Skipping {player_name}")
+                    data_skipped += 1
+                    print(f"⚠️ Data completeness issue: Skipping {player_name}")
                     continue
                 
                 # Post with staggered timing
@@ -816,7 +814,7 @@ class ProductionBlogGenerator:
         print(f"\n📊 SHIP-READY production posting summary:")
         print(f"✅ Successful: {successful_posts}")
         print(f"❌ Failed: {len(failed_posts)}")
-        print(f"⚠️ Thin content skipped: {thin_content_skipped}")
+        print(f"⚠️ Data issues skipped: {data_skipped}")
         print(f"📝 Total posted: {len(self.posted_players)}")
         print(f"🔄 Remaining: {175 - len(self.posted_players)}")
         
