@@ -72,7 +72,7 @@ KEYWORD_VARIATIONS = [
 ]
 
 # INTRO STYLE VARIATIONS (break the template mold)
-INTRO_STYLES = {
+INTRO_STYLES = [
     "standard": "Welcome to market-based fantasy analysis—rankings anchored to sportsbook player props rather than static projections. We translate Vegas lines into fantasy expectations so you can draft with data, not guesswork.",
     "direct": "The betting market prices {name} differently than ESPN. Here's why our sportsbook-derived analysis reveals edges traditional rankings miss.",
     "comparison": "ESPN ranks {name} at #{espn_rank}, but Vegas betting markets tell a different story. Our market-implied projections place {name} at #{rank} overall.",
@@ -930,11 +930,14 @@ class ProductionBlogGenerator:
 if __name__ == "__main__":
     import argparse
     
+    print("🔍 DEBUG: Starting main script...")
+    
     parser = argparse.ArgumentParser(description='SHIP-READY production blog posting to Webflow')
     parser.add_argument('--posts', type=int, default=9, help='Posts per day (default: 9)')
     parser.add_argument('--test', action='store_true', help='Test mode')
     
     args = parser.parse_args()
+    print(f"🔍 DEBUG: Args parsed: posts={args.posts}, test={args.test}")
     
     print("🛡️ SHIP-READY Production Blog Generator")
     print("✅ ALL gaps closed - set and forget!")
@@ -942,7 +945,13 @@ if __name__ == "__main__":
     print("✅ SEO + E-E-A-T + legal compliance")
     print("🔐 Environment variables validated")
     
-    generator = ProductionBlogGenerator()
+    print("🔍 DEBUG: Creating generator instance...")
+    try:
+        generator = ProductionBlogGenerator()
+        print("✅ Generator instance created successfully")
+    except Exception as e:
+        print(f"❌ Failed to create generator: {e}")
+        exit(1)
     
     if args.test:
         print("🧪 Test mode - validating setup")
@@ -951,4 +960,5 @@ if __name__ == "__main__":
         print(f"📋 Available Webflow fields: {sorted(fields)}")
         print(f"🔗 Anchor diversity tracker initialized: {generator.used_anchors}")
     else:
+        print("🔍 DEBUG: Starting production posting...")
         generator.run_production_posting(args.posts)
