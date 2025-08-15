@@ -72,7 +72,7 @@ KEYWORD_VARIATIONS = [
 ]
 
 # INTRO STYLE VARIATIONS (break the template mold)
-INTRO_STYLES = [
+INTRO_STYLES = {
     "standard": "Welcome to market-based fantasy analysis—rankings anchored to sportsbook player props rather than static projections. We translate Vegas lines into fantasy expectations so you can draft with data, not guesswork.",
     "direct": "The betting market prices {name} differently than ESPN. Here's why our sportsbook-derived analysis reveals edges traditional rankings miss.",
     "comparison": "ESPN ranks {name} at #{espn_rank}, but Vegas betting markets tell a different story. Our market-implied projections place {name} at #{rank} overall.",
