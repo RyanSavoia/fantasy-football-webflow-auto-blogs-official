@@ -1,4 +1,4 @@
-# production_ready_generator_ship_ready.py - FINAL ship-ready version with all gaps closed
+# production_ready_generator_ship_ready.py - FINAL ship-ready version with OpenAI removed
 import json
 import requests
 import os
@@ -9,7 +9,7 @@ import hashlib
 import html
 from datetime import datetime, timezone
 
-# 🔐 SECURITY: Environment variables with validation
+# 🔐 SECURITY: Environment variables with validation (OpenAI removed)
 REQUIRED_ENV_VARS = [
     'SUPABASE_URL', 'SUPABASE_ANON_KEY', 
     'WEBFLOW_API_TOKEN', 'WEBFLOW_SITE_ID', 'WEBFLOW_COLLECTION_ID'
@@ -738,9 +738,9 @@ class ProductionBlogGenerator:
         
         # Fetch all players
         try:
-            response = self._get(
-                f'{SUPABASE_URL}/rest/v1/players?position=not.in.(D/ST,K)&order=overall_rank.asc&limit=175',
-                self.supabase_headers
+            response = self._sb_get(
+                "/rest/v1/players",
+                {"position": "not.in.(D/ST,K)", "order": "overall_rank.asc", "limit": 175, "select": "*"}
             )
             
             if response.status_code != 200:
