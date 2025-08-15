@@ -8,9 +8,9 @@ services:
     schedule: "0 11 * * *"  # Daily at 11 AM UTC (6 AM EST)
     envVars:
       - key: SUPABASE_URL
-        value: https://your-project.supabase.co
+        value: https://prypgwgaeadicxlgbgjw.supabase.co
       - key: SUPABASE_ANON_KEY
-        value: your_supabase_anon_key_here
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InByeXBnd2dhZWFkaWN4bGdiZ2p3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIxNzE0MDEsImV4cCI6MjA2Nzc0NzQwMX0.nSehEJTPVnfhsD2y98lGzVNTTJ8MFfwv3Vaw5kLbAYc
       - key: WEBFLOW_API_TOKEN
         value: 453c0edb1c3b2face2f6b9a463d1c2310de080b4c1af36b0f3898866c8c2b5b6
       - key: WEBFLOW_SITE_ID
