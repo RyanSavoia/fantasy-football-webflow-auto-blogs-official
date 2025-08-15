@@ -72,7 +72,7 @@ KEYWORD_VARIATIONS = [
 ]
 
 # INTRO STYLE VARIATIONS (break the template mold)
-INTRO_STYLES = {
+INTRO_STYLES = [
     "standard": "Welcome to market-based fantasy analysis—rankings anchored to sportsbook player props rather than static projections. We translate Vegas lines into fantasy expectations so you can draft with data, not guesswork.",
     "direct": "The betting market prices {name} differently than ESPN. Here's why our sportsbook-derived analysis reveals edges traditional rankings miss.",
     "comparison": "ESPN ranks {name} at #{espn_rank}, but Vegas betting markets tell a different story. Our market-implied projections place {name} at #{rank} overall.",
@@ -769,7 +769,26 @@ class ProductionBlogGenerator:
         print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         print("✅ ALL gaps closed - truly set-and-forget")
         
+        # DEBUG: Test Supabase connection first
+        print("🔍 Testing Supabase connection...")
+        try:
+            test_response = requests.get(
+                f'{SUPABASE_URL}/rest/v1/players?limit=1',
+                headers=self.supabase_headers,
+                timeout=10
+            )
+            print(f"🔍 Supabase test response: {test_response.status_code}")
+            if test_response.status_code == 200:
+                print("✅ Supabase connection successful")
+            else:
+                print(f"❌ Supabase connection failed: {test_response.text}")
+                return
+        except Exception as e:
+            print(f"❌ Supabase connection error: {e}")
+            return
+        
         # Fetch all players using ORIGINAL working method
+        print("📊 Fetching all players...")
         try:
             response = requests.get(
                 f'{SUPABASE_URL}/rest/v1/players?position=not.in.(D/ST,K)&order=overall_rank.asc&limit=175',
@@ -777,8 +796,11 @@ class ProductionBlogGenerator:
                 timeout=30
             )
             
+            print(f"📊 Player fetch response: {response.status_code}")
+            
             if response.status_code != 200:
                 print(f"❌ Failed to fetch players: {response.status_code}")
+                print(f"❌ Response text: {response.text}")
                 return
             
             all_players = response.json()
