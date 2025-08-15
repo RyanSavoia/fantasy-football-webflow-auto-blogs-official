@@ -769,11 +769,12 @@ class ProductionBlogGenerator:
         print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         print("✅ ALL gaps closed - truly set-and-forget")
         
-        # Fetch all players
+        # Fetch all players using ORIGINAL working method
         try:
-            response = self._sb_get(
-                "/rest/v1/players",
-                {"position": "not.in.(D/ST,K)", "order": "overall_rank.asc", "limit": 175, "select": "*"}
+            response = requests.get(
+                f'{SUPABASE_URL}/rest/v1/players?position=not.in.(D/ST,K)&order=overall_rank.asc&limit=175',
+                headers=self.supabase_headers,
+                timeout=30
             )
             
             if response.status_code != 200:
@@ -867,12 +868,13 @@ class ProductionBlogGenerator:
         print(f"🚀 SHIP-READY: Set and forget!")
     
     def fetch_detailed_player_data(self, player_name):
-        """FIXED: Fetch detailed player data with clean param encoding"""
+        """FIXED: Use ORIGINAL working Supabase query method"""
         try:
-            # Player info with clean parameter encoding
-            player_response = self._sb_get(
-                "/rest/v1/players",
-                {"name": f"ilike.%{player_name}%", "order": "overall_rank.asc", "limit": 1, "select": "*"}
+            # Player info using ORIGINAL working method
+            player_response = requests.get(
+                f'{SUPABASE_URL}/rest/v1/players?name=ilike.%{player_name}%',
+                headers=self.supabase_headers,
+                timeout=30
             )
             
             if player_response.status_code != 200 or not player_response.json():
@@ -881,10 +883,11 @@ class ProductionBlogGenerator:
             player_info = player_response.json()[0]
             player_id = player_info['id']
             
-            # Betting data with explicit select
-            betting_response = self._sb_get(
-                "/rest/v1/player_betting_breakdown",
-                {"player_id": f"eq.{player_id}", "select": "*"}
+            # Betting data using ORIGINAL working method
+            betting_response = requests.get(
+                f'{SUPABASE_URL}/rest/v1/player_betting_breakdown?player_id=eq.{player_id}',
+                headers=self.supabase_headers,
+                timeout=30
             )
             
             betting_data = betting_response.json()[0] if betting_response.status_code == 200 and betting_response.json() else {}
