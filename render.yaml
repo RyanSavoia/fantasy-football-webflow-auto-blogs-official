@@ -1,0 +1,19 @@
+services:
+  - type: cron
+    name: fantasy-blog-generator
+    env: python
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python production_ready_generator_ship_ready.py --posts 9
+    schedule: "0 11 * * *"  # Daily at 11 AM UTC (6 AM EST)
+    envVars:
+      - key: SUPABASE_URL
+        value: https://your-project.supabase.co
+      - key: SUPABASE_ANON_KEY
+        value: your_supabase_anon_key_here
+      - key: WEBFLOW_API_TOKEN
+        value: 453c0edb1c3b2face2f6b9a463d1c2310de080b4c1af36b0f3898866c8c2b5b6
+      - key: WEBFLOW_SITE_ID
+        value: 670bfa1fd9c3c20a149fa6a7
+      - key: WEBFLOW_COLLECTION_ID
+        value: 688d24060fe06c2b1af60f92
