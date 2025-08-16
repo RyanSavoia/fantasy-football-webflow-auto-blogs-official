@@ -71,13 +71,14 @@ KEYWORD_VARIATIONS = [
     "Vegas-derived player projections"
 ]
 
-# INTRO STYLE VARIATIONS (break the template mold)
+# INTRO STYLE VARIATIONS (break the template mold) - FIXED: Changed to dict
 INTRO_STYLES = {
     "standard": "Welcome to market-based fantasy analysis—rankings anchored to sportsbook player props rather than static projections. We translate Vegas lines into fantasy expectations so you can draft with data, not guesswork.",
     "direct": "The betting market prices {name} differently than ESPN. Here's why our sportsbook-derived analysis reveals edges traditional rankings miss.",
     "comparison": "ESPN ranks {name} at #{espn_rank}, but Vegas betting markets tell a different story. Our market-implied projections place {name} at #{rank} overall.",
     "insight": "When sportsbooks set player prop lines, they're pricing real performance expectations. That market efficiency creates actionable fantasy insights traditional analysis overlooks."
 }
+
 FAQ_POOLS = {
     'primary': [
         "Is {name} worth a first-round pick in 2025?",
@@ -239,31 +240,63 @@ class ProductionBlogGenerator:
         except:
             return None
     
+    def _as_webflow_image(self, url, alt=""):
+        """Convert image URL to Webflow v2 image object format"""
+        if not url:
+            return None
+        return {"url": url, "alt": alt}
+    
     def _webflow_allowed_fields(self):
-        """Cache and fetch Webflow collection schema to only send valid fields"""
+        """Fetch Webflow collection schema and return a tolerant allowlist of slugs."""
         if hasattr(self, "_wf_fields_cache"):
             return self._wf_fields_cache
+
+        # A conservative fallback set of slugs you actually use.
+        # (Use exact slugs from your Webflow collection. Adjust if your Designer shows different slugs.)
+        fallback = {
+            "name", "slug",
+            "post-body", "player-name",
+            "meta-title", "meta-description",
+            "json-ld", "canonical-url", "noindex",
+            "position", "team", "overall-rank", "position-rank",
+            "fantasy-score", "rush-line", "rec-line", "td-line",
+            "playoff-sos", "headshot-url", "featured-image",
+            "status",
+            # REQUIRED field in your collection:
+            "main-image",
+        }
+
         try:
             r = self._get(
                 f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}',
                 self.webflow_headers
             )
             r.raise_for_status()
-            fields = {f['slug'] for f in r.json().get('fields', [])}
+            data = r.json()
+
+            # Webflow returns custom fields under 'fields'; core fields like name/slug might not appear there.
+            schema_slugs = {f.get("slug") for f in data.get("fields", []) if f.get("slug")}
+            # Always include name/slug and our known requireds
+            schema_slugs |= {"name", "slug", "main-image"}
+
+            # If the API returned slugs, use them (no union with fallback).
+            # Only fall back when schema is empty/unavailable.
+            allowed = schema_slugs if schema_slugs else fallback
         except Exception:
-            # fail open to minimal set if schema fetch fails
-            fields = set(["name","slug","post-body","player-name","meta-title",
-                          "meta-description","json-ld","canonical-url","noindex"])
-        self._wf_fields_cache = fields
-        return fields
+            # If schema fetch fails, use fallback
+            allowed = fallback
+
+        self._wf_fields_cache = allowed
+        return allowed
 
     def _filter_to_allowed(self, fielddata: dict):
-        """FIXED: Filter field data with schema drift logging"""
+        """Filter field data using the allowlist, but log deltas to help debugging."""
         allowed = self._webflow_allowed_fields()
         filtered = {k: v for k, v in fielddata.items() if k in allowed}
-        dropped = set(fielddata.keys()) - set(filtered.keys())
+        dropped = sorted(set(fielddata.keys()) - set(filtered.keys()))
         if dropped:
-            print(f"ℹ️ Skipped unknown fields: {sorted(dropped)}")
+            print(f"ℹ️ Skipped unknown fields: {dropped}")
+            print(f"ℹ️ Allowed slugs sample: {sorted(list(allowed))[:25]} ... (total {len(allowed)})")
         return filtered
     
     def check_data_completeness(self, player_data):
@@ -586,19 +619,22 @@ class ProductionBlogGenerator:
         # Featured image with neutral fallback
         featured_image = player_data.get('player_headshot_url', 'https://thebettinginsider.com/images/player-placeholder-400x400.png')
         
+        # Main image - use player headshot if available, otherwise fallback to static
+        main_img_url = featured_image or "https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png"
+        
         # Prepare complete field data (will be filtered to allowed fields in posting)
         fieldData_raw = {
             "name": title,
             "slug": unique_slug,
             "post-body": post_body,
+            "player-name": full_name,
             "meta-title": title,
             "meta-description": meta,
-            "main-image": featured_image,  # FIXED: Add required main-image field
-            # Optional fields if your collection has them
-            "player-name": full_name,
             "json-ld": json_ld,
             "canonical-url": f"https://thebettinginsider.com/fantasy-football/{unique_slug}",
             "noindex": not data_ok,
+
+            # Optional fields if your collection has them
             "position": position,
             "team": team,
             "overall-rank": overall_rank,
@@ -608,16 +644,14 @@ class ProductionBlogGenerator:
             "rec-line": rec_line,
             "td-line": td_line,
             "playoff-sos": player_data.get('playoff_sos_score'),
-            "headshot-url": featured_image,
-            "featured-image": featured_image,  # If your CMS has this field
-            "status": "published" if data_ok else "thin_content_gate",  # If your CMS has this field
-        }-line": rush_line,
-            "rec-line": rec_line,
-            "td-line": td_line,
-            "playoff-sos": player_data.get('playoff_sos_score'),
-            "headshot-url": featured_image,
-            "featured-image": featured_image,  # If your CMS has this field
-            "status": "published" if data_ok else "thin_content_gate",  # If your CMS has this field
+
+            # IMAGE FIELDS (objects per Webflow v2 API requirements)
+            "main-image": self._as_webflow_image(main_img_url, alt=f"{full_name} fantasy article image"),
+            "featured-image": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
+            "headshot-url": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
+
+            # Optional / may or may not exist in your schema:
+            "status": "published" if data_ok else "thin_content_gate",
         }
 
         return {
