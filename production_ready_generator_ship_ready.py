@@ -591,19 +591,27 @@ class ProductionBlogGenerator:
             "name": title,
             "slug": unique_slug,
             "post-body": post_body,
-            "player-name": full_name,
             "meta-title": title,
             "meta-description": meta,
+            "main-image": featured_image,  # FIXED: Add required main-image field
+            # Optional fields if your collection has them
+            "player-name": full_name,
             "json-ld": json_ld,
             "canonical-url": f"https://thebettinginsider.com/fantasy-football/{unique_slug}",
             "noindex": not data_ok,
-            # Optional fields if your collection has them
             "position": position,
             "team": team,
             "overall-rank": overall_rank,
             "position-rank": player_data.get('position_rank'),
             "fantasy-score": fantasy_score,
             "rush-line": rush_line,
+            "rec-line": rec_line,
+            "td-line": td_line,
+            "playoff-sos": player_data.get('playoff_sos_score'),
+            "headshot-url": featured_image,
+            "featured-image": featured_image,  # If your CMS has this field
+            "status": "published" if data_ok else "thin_content_gate",  # If your CMS has this field
+        }-line": rush_line,
             "rec-line": rec_line,
             "td-line": td_line,
             "playoff-sos": player_data.get('playoff_sos_score'),
