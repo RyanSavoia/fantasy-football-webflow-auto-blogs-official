@@ -624,13 +624,13 @@ class ProductionBlogGenerator:
             print(f"⚠️ Duplicate content detected for {full_name}")
             return None
         
-        # Featured image with guaranteed fallback
+        # Featured image with guaranteed fallback to Webflow CDN
         featured_image = (player_data.get('player_headshot_url') or "").strip()
         if not featured_image:
-            featured_image = 'https://thebettinginsider.com/images/player-placeholder-400x400.png'
+            featured_image = 'https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png'
         
         # Main image - always ensure we have a valid URL
-        main_img_url = featured_image or "https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png"
+        main_img_url = featured_image
         
         # Generate summary for potential required field
         summary = self.word_safe_clamp(clean_text.strip(), 220)
