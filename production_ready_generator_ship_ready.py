@@ -7,7 +7,15 @@ import re
 import time
 import hashlib
 import html
+import sys
 from datetime import datetime, timezone
+
+# Fix stdout buffering for Render logs
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass  # Py<3.7 fallback
 
 # 🔐 SECURITY: Environment variables with validation (OpenAI removed)
 REQUIRED_ENV_VARS = [
@@ -241,10 +249,10 @@ class ProductionBlogGenerator:
             return None
     
     def _as_webflow_image(self, url, alt=""):
-        """Convert image URL to Webflow v2 image object format"""
-        if not url:
-            return None
-        return {"url": url, "alt": alt}
+        """Convert image URL to Webflow v2 image object format - guaranteed non-null"""
+        FALLBACK = "https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png"
+        u = (url or "").strip() or FALLBACK
+        return {"url": u, "alt": alt}
     
     def _webflow_allowed_fields(self):
         """Fetch Webflow collection schema and return a tolerant allowlist of slugs."""
@@ -617,8 +625,8 @@ class ProductionBlogGenerator:
             return None
         
         # Featured image with guaranteed fallback
-        featured_image = player_data.get('player_headshot_url') 
-        if not featured_image or featured_image.strip() == "":
+        featured_image = (player_data.get('player_headshot_url') or "").strip()
+        if not featured_image:
             featured_image = 'https://thebettinginsider.com/images/player-placeholder-400x400.png'
         
         # Main image - always ensure we have a valid URL
@@ -655,6 +663,13 @@ class ProductionBlogGenerator:
             # Optional / may or may not exist in your schema:
             "status": "published" if data_ok else "thin_content_gate",
         }
+
+        # FINAL hard guard to prevent 400s
+        mi = fieldData_raw.get("main-image")
+        if not isinstance(mi, dict) or not mi.get("url"):
+            fieldData_raw["main-image"] = self._as_webflow_image(None, alt="fallback image")
+        
+        print(f"DEBUG main-image payload: {fieldData_raw['main-image']}", flush=True)
 
         return {
             # Return both raw and filtered field data
@@ -729,10 +744,10 @@ class ProductionBlogGenerator:
     def post_to_webflow_enhanced(self, blog_data, delay_minutes=None):
         """FIXED: Enhanced Webflow posting using _post_with_backoff"""
         
-        # Staggered timing
-        if delay_minutes:
+        # Staggered timing - skip delay if NO_DELAY env var is set
+        if delay_minutes and os.getenv("NO_DELAY") != "1":
             delay_seconds = delay_minutes * 60
-            print(f"⏳ Waiting {delay_minutes} minutes before posting...")
+            print(f"⏳ Waiting {delay_minutes} minutes before posting...", flush=True)
             time.sleep(delay_seconds)
         
         # Prepare Webflow payload with field filtering
