@@ -831,29 +831,42 @@ class ProductionBlogGenerator:
             except: 
                 pass
     
-    def publish_webflow_site(self):
-        """FIXED: Safer publish with backoff reuse"""
+    def publish_webflow_site(self, publish_custom=True, publish_staging=True):
+        """Publish using Webflow API v2 (customDomains + optional staging)."""
         try:
-            resp = self._get(
-                f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}',
-                self.webflow_headers
-            )
-            resp.raise_for_status()
-            domains = [d['name'] for d in resp.json().get('domains', []) if d.get('name')]
-            payload = {"domains": domains or ["all"]}
-            
-            r = self._post_with_backoff(
+            # Fetch custom domain IDs (v2)
+            domain_ids = []
+            if publish_custom:
+                r = self._get(
+                    f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/custom-domains',
+                    self.webflow_headers
+                )
+                r.raise_for_status()
+                data = r.json()
+                domain_ids = [d["id"] for d in data.get("customDomains", []) if d.get("id")]
+
+            # Build v2 publish payload
+            payload = {"publishToWebflowSubdomain": bool(publish_staging)}
+            if domain_ids:
+                payload["customDomains"] = domain_ids
+
+            print("DEBUG publish payload:", payload, flush=True)
+
+            resp = self._post_with_backoff(
                 f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
-                self.webflow_headers, payload, tries=3
+                self.webflow_headers,
+                payload,
+                tries=3
             )
-            
-            if r.status_code in [200, 202]:
-                print("✅ Webflow site published successfully")
-                # Ping search engines
+
+            if resp.status_code in (200, 202):
+                print("✅ Webflow site publish queued")
                 self.ping_search_engines()
                 return True
-            print(f"❌ Failed to publish site: {r.status_code} {r.text}")
+
+            print(f"❌ Failed to publish site: {resp.status_code} {resp.text}")
             return False
+
         except Exception as e:
             print(f"❌ Error publishing site: {e}")
             return False
