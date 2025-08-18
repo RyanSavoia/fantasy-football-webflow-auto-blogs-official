@@ -831,45 +831,45 @@ class ProductionBlogGenerator:
             except: 
                 pass
     
-def publish_webflow_site(self):
-    """Publish using Webflow API v2 (customDomains + optional staging)."""
-    try:
-        # 1) Fetch custom domain IDs
-        domain_ids = []
-        r = self._get(
-            f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/custom_domains',
-            self.webflow_headers
-        )
-        r.raise_for_status()
-        data = r.json()
-        domain_ids = [d["id"] for d in data.get("customDomains", []) if d.get("id")]
-
-        # 2) Build correct v2 payload
-        payload = {"publishToWebflowSubdomain": True}  # also publish staging (your .webflow.io)
-        if domain_ids:
-            payload["customDomains"] = domain_ids       # publish custom domains too
-
-        print("DEBUG publish payload:", payload, flush=True)
-
-        # 3) Publish
-        resp = self._post_with_backoff(
-            f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
-            self.webflow_headers,
-            payload,
-            tries=3
-        )
-
-        if resp.status_code in (200, 202):
-            print("✅ Webflow site publish queued")
-            self.ping_search_engines()
-            return True
-
-        print(f"❌ Failed to publish site: {resp.status_code} {resp.text}")
-        return False
-
-    except Exception as e:
-        print(f"❌ Error publishing site: {e}")
-        return False
+    def publish_webflow_site(self, publish_custom=True, publish_staging=True):
+        """FIXED: Publish using Webflow API v2 (customDomains + optional staging)."""
+        try:
+            # Fetch custom domain IDs (v2)
+            domain_ids = []
+            if publish_custom:
+                r = self._get(
+                    f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/custom_domains',
+                    self.webflow_headers
+                )
+                r.raise_for_status()
+                data = r.json()
+                domain_ids = [d["id"] for d in data.get("customDomains", []) if d.get("id")]
+            
+            # Build v2 publish payload
+            payload = {"publishToWebflowSubdomain": bool(publish_staging)}
+            if domain_ids:
+                payload["customDomains"] = domain_ids
+            
+            print("DEBUG publish payload:", payload, flush=True)
+            
+            resp = self._post_with_backoff(
+                f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
+                self.webflow_headers,
+                payload,
+                tries=3
+            )
+            
+            if resp.status_code in (200, 202):
+                print("✅ Webflow site publish queued")
+                self.ping_search_engines()
+                return True
+            
+            print(f"❌ Failed to publish site: {resp.status_code} {resp.text}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error publishing site: {e}")
+            return False
     
     def run_production_posting(self, posts_per_day=9):
         """Production posting - SHIP READY with all gaps closed"""
