@@ -616,10 +616,12 @@ class ProductionBlogGenerator:
             print(f"⚠️ Duplicate content detected for {full_name}")
             return None
         
-        # Featured image with neutral fallback
-        featured_image = player_data.get('player_headshot_url', 'https://thebettinginsider.com/images/player-placeholder-400x400.png')
+        # Featured image with guaranteed fallback
+        featured_image = player_data.get('player_headshot_url') 
+        if not featured_image or featured_image.strip() == "":
+            featured_image = 'https://thebettinginsider.com/images/player-placeholder-400x400.png'
         
-        # Main image - use player headshot if available, otherwise fallback to static
+        # Main image - always ensure we have a valid URL
         main_img_url = featured_image or "https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png"
         
         # Prepare complete field data (will be filtered to allowed fields in posting)
@@ -645,7 +647,7 @@ class ProductionBlogGenerator:
             "td-line": td_line,
             "playoff-sos": player_data.get('playoff_sos_score'),
 
-            # IMAGE FIELDS (objects per Webflow v2 API requirements)
+            # IMAGE FIELDS (objects per Webflow v2 API requirements) - GUARANTEED NON-NULL
             "main-image": self._as_webflow_image(main_img_url, alt=f"{full_name} fantasy article image"),
             "featured-image": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
             "headshot-url": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
