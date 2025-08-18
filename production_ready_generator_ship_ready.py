@@ -632,6 +632,9 @@ class ProductionBlogGenerator:
         # Main image - always ensure we have a valid URL
         main_img_url = featured_image or "https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png"
         
+        # Generate summary for potential required field
+        summary = self.word_safe_clamp(clean_text.strip(), 220)
+        
         # Prepare complete field data (will be filtered to allowed fields in posting)
         fieldData_raw = {
             "name": title,
@@ -659,6 +662,11 @@ class ProductionBlogGenerator:
             "main-image": self._as_webflow_image(main_img_url, alt=f"{full_name} fantasy article image"),
             "featured-image": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
             "headshot-url": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
+
+            # Likely required fields based on schema
+            "post-summary": summary,
+            "featured": False,
+            "url": f"https://thebettinginsider.com/fantasy-football/{unique_slug}",
 
             # Optional / may or may not exist in your schema:
             "status": "published" if data_ok else "thin_content_gate",
@@ -750,11 +758,39 @@ class ProductionBlogGenerator:
             print(f"⏳ Waiting {delay_minutes} minutes before posting...", flush=True)
             time.sleep(delay_seconds)
         
+        # DEBUG: Check required fields in collection (run once)
+        if not hasattr(self, '_logged_required_fields'):
+            try:
+                schema = self._get(f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}', self.webflow_headers).json()
+                required = [(f.get("slug"), f.get("type")) for f in schema.get("fields", []) if f.get("isRequired")]
+                print("DEBUG required fields:", required, flush=True)
+                self._logged_required_fields = True
+            except Exception as e:
+                print("DEBUG could not inspect required fields:", e, flush=True)
+        
         # Prepare Webflow payload with field filtering
+        filtered_data = self._filter_to_allowed(blog_data['fieldData_raw'])
+        
+        # TEMP: Force a known-good CDN image to rule out remote fetch issues
+        if os.getenv("WF_FORCE_CDN_IMAGE") == "1":
+            filtered_data["main-image"] = self._as_webflow_image(
+                "https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png",
+                alt=f"{blog_data['full_name']} fallback"
+            )
+
+        print("DEBUG fieldData keys (post-filter):", sorted(filtered_data.keys()), flush=True)
+        print("DEBUG main-image (post-filter):", filtered_data.get("main-image"), flush=True)
+
+        # Hard guard: if somehow missing or malformed, bail with a clear log
+        mi = filtered_data.get("main-image")
+        if not isinstance(mi, dict) or not (mi.get("url") or mi.get("fileId")):
+            print("ERROR: main-image missing from filtered payload or empty. Aborting this item.", flush=True)
+            return False
+
         post_data = {
             "isArchived": False,
             "isDraft": False,
-            "fieldData": self._filter_to_allowed(blog_data['fieldData_raw'])
+            "fieldData": filtered_data
         }
         
         try:
