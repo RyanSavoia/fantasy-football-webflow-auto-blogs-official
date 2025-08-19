@@ -17,23 +17,32 @@ try:
 except Exception:
     pass  # Py<3.7 fallback
 
-# 🔐 SECURITY: Environment variables with validation (OpenAI removed)
-REQUIRED_ENV_VARS = [
-    'SUPABASE_URL', 'SUPABASE_ANON_KEY', 
-    'WEBFLOW_API_TOKEN', 'WEBFLOW_SITE_ID', 'WEBFLOW_COLLECTION_ID'
-]
+# 🔐 SECURITY: Environment variables with validation - Supabase now optional
+REQUIRED_ENV_VARS = ['WEBFLOW_API_TOKEN', 'WEBFLOW_SITE_ID', 'WEBFLOW_COLLECTION_ID']
 
-# Validate all required environment variables
+# Validate required Webflow environment variables
 missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 if missing_vars:
     raise ValueError(f"🔐 CRITICAL: Missing required environment variables: {len(missing_vars)} vars")
 
-# Load environment variables
+# Load environment variables (Supabase optional)
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY')
 WEBFLOW_API_TOKEN = os.getenv('WEBFLOW_API_TOKEN')
 WEBFLOW_SITE_ID = os.getenv('WEBFLOW_SITE_ID')
 WEBFLOW_COLLECTION_ID = os.getenv('WEBFLOW_COLLECTION_ID')
+
+# Supabase keys optional; code will fall back to files if API calls 404/fail
+HAS_SUPABASE = bool(SUPABASE_URL and SUPABASE_ANON_KEY)
+
+# State persistence configuration
+STATE_DIR = os.getenv("STATE_DIR", ".")
+POSTED_PATH = os.path.join(STATE_DIR, "posted_players.json")
+HASHES_PATH = os.path.join(STATE_DIR, "content_hashes.json")
+ANCHORS_PATH = os.path.join(STATE_DIR, "used_anchors.json")
+
+# Ensure state directory exists
+os.makedirs(STATE_DIR, exist_ok=True)
 
 # TEAM ESPN SLUG MAPPING (expanded with abbreviations)
 TEAM_ESPN_SLUGS = {
@@ -101,8 +110,9 @@ ESPN_INSIGHTS = {
     'Amon-Ra St. Brown': "Three-year consistency king with 105+ receptions annually. Career-high 12 touchdowns in 2024 campaign."
 }
 
-# FULL PLAYER NAME MAPPING (expanded with missing variants)
+# FULL PLAYER NAME MAPPING (expanded with period variants)
 PLAYER_NAME_MAPPING = {
+    # Without periods (original)
     'C McCaffrey': 'Christian McCaffrey', 'C Lamb': 'CeeDee Lamb', 'J Chase': 'Ja\'Marr Chase',
     'J Jefferson': 'Justin Jefferson', 'AJ Brown': 'A.J. Brown', 'B Robinson': 'Bijan Robinson',
     'S Barkley': 'Saquon Barkley', 'D Henry': 'Derrick Henry', 'J Gibbs': 'Jahmyr Gibbs',
@@ -114,12 +124,25 @@ PLAYER_NAME_MAPPING = {
     'M Evans': 'Mike Evans', 'J Smith-Njigba': 'Jaxon Smith-Njigba', 'D Adams': 'Davante Adams',
     'J Jacobs': 'Josh Jacobs', 'B Hall': 'Breece Hall', 'T McLaurin': 'Terry McLaurin',
     'M Harrison Jr': 'Marvin Harrison Jr.', 'DJ Moore': 'D.J. Moore', 'B Bowers': 'Brock Bowers',
+    # WITH periods (what Supabase actually has)
+    'J. Chase': 'Ja\'Marr Chase', 'J. Jefferson': 'Justin Jefferson', 'J. Gibbs': 'Jahmyr Gibbs',
+    'C. McCaffrey': 'Christian McCaffrey', 'C. Lamb': 'CeeDee Lamb', 'S. Barkley': 'Saquon Barkley',
+    'D. Henry': 'Derrick Henry', 'D. Achane': 'De\'Von Achane', 'J. Allen': 'Josh Allen',
+    'L. Jackson': 'Lamar Jackson', 'J. Hurts': 'Jalen Hurts', 'P. Nacua': 'Puka Nacua',
+    'M. Nabers': 'Malik Nabers', 'N. Collins': 'Nico Collins', 'D. London': 'Drake London',
+    'T. Hill': 'Tyreek Hill', 'J. Cook': 'James Cook', 'J. Taylor': 'Jonathan Taylor',
+    'T. Higgins': 'Tee Higgins', 'L. McConkey': 'Ladd McConkey', 'M. Evans': 'Mike Evans',
+    'D. Adams': 'Davante Adams', 'J. Jacobs': 'Josh Jacobs', 'T. McLaurin': 'Terry McLaurin',
     # Missing variants that GPT identified:
     'A. St. Brown': 'Amon-Ra St. Brown', 'A St. Brown': 'Amon-Ra St. Brown',
-    'S LaPorta': 'Sam LaPorta', 'T Kelce': 'Travis Kelce', 'D Smith': 'DeVonta Smith',
-    'A Jones': 'Aaron Jones', 'Aaron Jones Sr.': 'Aaron Jones',
+    'S LaPorta': 'Sam LaPorta', 'S. LaPorta': 'Sam LaPorta', 'T Kelce': 'Travis Kelce', 
+    'T. Kelce': 'Travis Kelce', 'D Smith': 'DeVonta Smith', 'D. Smith': 'DeVonta Smith',
+    'A Jones': 'Aaron Jones', 'A. Jones': 'Aaron Jones', 'Aaron Jones Sr.': 'Aaron Jones',
+    # Additional variants GPT suggested:
+    'D. Samuel': 'Deebo Samuel', 'D Samuel': 'Deebo Samuel',
     # Additional common variants:
-    'K Williams': 'Kyren Williams', 'B Bowers': 'Brock Bowers', 'T McBride': 'Trey McBride'
+    'K Williams': 'Kyren Williams', 'K. Williams': 'Kyren Williams', 
+    'T McBride': 'Trey McBride', 'T. McBride': 'Trey McBride'
 }
 
 
@@ -169,17 +192,19 @@ class ProductionBlogGenerator:
             'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
             'Content-Type': 'application/json',
             'Accept': 'application/json'
-        }
+        } if HAS_SUPABASE else {}
+        
         self.webflow_headers = {
             'Authorization': f'Bearer {WEBFLOW_API_TOKEN}',
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
         
-        # Initialize Supabase state table
-        self.init_supabase_state()
+        # Initialize Supabase state table (if available)
+        if HAS_SUPABASE:
+            self.init_supabase_state()
         
-        # Load state from Supabase instead of JSON files
+        # Load state from Supabase with file fallbacks
         self.content_hashes = self.load_content_hashes_from_supabase()
         self.posted_players = self.load_posted_players_from_supabase()
         self.used_anchors = self.load_used_anchors_from_supabase()
@@ -234,7 +259,7 @@ class ProductionBlogGenerator:
             print(f"⚠️ Could not initialize Supabase tables: {e}")
     
     def load_content_hashes_from_supabase(self):
-        """Load content hashes from Supabase"""
+        """Load content hashes from Supabase with file fallback"""
         try:
             response = self._get(
                 f'{SUPABASE_URL}/rest/v1/state_data?key=eq.content_hashes',
@@ -246,10 +271,22 @@ class ProductionBlogGenerator:
                     return set(data[0]['data'])
         except Exception as e:
             print(f"⚠️ Could not load content hashes from Supabase: {e}")
+        
+        # Fallback to local file
+        return self.load_content_hashes_from_file()
+    
+    def load_content_hashes_from_file(self):
+        """Fallback: Load content hashes from local file"""
+        if os.path.exists('content_hashes.json'):
+            try:
+                with open('content_hashes.json', 'r') as f:
+                    return set(json.load(f))
+            except Exception:
+                pass
         return set()
     
     def save_content_hashes_to_supabase(self):
-        """Save content hashes to Supabase"""
+        """Save content hashes to Supabase with file fallback"""
         try:
             payload = {
                 'key': 'content_hashes',
@@ -266,12 +303,22 @@ class ProductionBlogGenerator:
             
             if response.status_code not in [200, 201]:
                 print(f"⚠️ Failed to save content hashes: {response.status_code}")
+                self.save_content_hashes_to_file()
                 
         except Exception as e:
             print(f"⚠️ Error saving content hashes: {e}")
+            self.save_content_hashes_to_file()
+    
+    def save_content_hashes_to_file(self):
+        """Fallback: Save content hashes to local file"""
+        try:
+            with open('content_hashes.json', 'w') as f:
+                json.dump(list(self.content_hashes), f)
+        except Exception as e:
+            print(f"⚠️ Could not save content hashes to file: {e}")
     
     def load_posted_players_from_supabase(self):
-        """Load posted players from Supabase"""
+        """Load posted players from Supabase with file fallback"""
         try:
             response = self._get(
                 f'{SUPABASE_URL}/rest/v1/posted_articles?select=player_name',
@@ -282,10 +329,35 @@ class ProductionBlogGenerator:
                 return [item['player_name'] for item in data]
         except Exception as e:
             print(f"⚠️ Could not load posted players from Supabase: {e}")
+        
+        # Fallback to local file if Supabase fails
+        return self.load_posted_players_from_file()
+    
+    def load_posted_players_from_file(self):
+        """Fallback: Load posted players from local file"""
+        if os.path.exists(POSTED_PATH):
+            try:
+                with open(POSTED_PATH, 'r') as f:
+                    data = json.load(f)
+                    print(f"📁 Loaded {len(data)} posted players from file")
+                    return data
+            except Exception:
+                pass
         return []
     
+    def save_posted_player_to_file(self, player_name):
+        """Fallback: Save posted player to local file"""
+        try:
+            if player_name not in self.posted_players:
+                self.posted_players.append(player_name)
+                with open(POSTED_PATH, 'w') as f:
+                    json.dump(self.posted_players, f, indent=2)
+                print(f"📁 Saved {player_name} to posted_players.json")
+        except Exception as e:
+            print(f"⚠️ Could not save to file: {e}")
+    
     def save_posted_player_to_supabase(self, player_name, slug, content_hash):
-        """Save individual posted player to Supabase"""
+        """Save individual posted player to Supabase with file fallback"""
         try:
             payload = {
                 'player_name': player_name,
@@ -306,14 +378,54 @@ class ProductionBlogGenerator:
                 return True
             else:
                 print(f"⚠️ Failed to save posted player: {response.status_code}")
+                # Fallback to file
+                self.save_posted_player_to_file(player_name)
                 return False
                 
         except Exception as e:
             print(f"⚠️ Error saving posted player: {e}")
+            # Fallback to file
+            self.save_posted_player_to_file(player_name)
             return False
     
+    def load_content_hashes_from_file(self):
+        """Fallback: Load content hashes from local file"""
+        if os.path.exists(HASHES_PATH):
+            try:
+                with open(HASHES_PATH, 'r') as f:
+                    return set(json.load(f))
+            except Exception:
+                pass
+        return set()
+    
+    def save_content_hashes_to_file(self):
+        """Fallback: Save content hashes to local file"""
+        try:
+            with open(HASHES_PATH, 'w') as f:
+                json.dump(list(self.content_hashes), f)
+        except Exception as e:
+            print(f"⚠️ Could not save content hashes to file: {e}")
+    
+    def load_content_hashes_from_file(self):
+        """Fallback: Load content hashes from local file"""
+        if os.path.exists(HASHES_PATH):
+            try:
+                with open(HASHES_PATH, 'r') as f:
+                    return set(json.load(f))
+            except Exception:
+                pass
+        return set()
+    
+    def save_content_hashes_to_file(self):
+        """Fallback: Save content hashes to local file"""
+        try:
+            with open(HASHES_PATH, 'w') as f:
+                json.dump(list(self.content_hashes), f)
+        except Exception as e:
+            print(f"⚠️ Could not save content hashes to file: {e}")
+    
     def load_used_anchors_from_supabase(self):
-        """Load used anchors from Supabase"""
+        """Load used anchors from Supabase with file fallback"""
         try:
             response = self._get(
                 f'{SUPABASE_URL}/rest/v1/state_data?key=eq.used_anchors',
@@ -325,10 +437,22 @@ class ProductionBlogGenerator:
                     return data[0]['data']
         except Exception as e:
             print(f"⚠️ Could not load used anchors from Supabase: {e}")
+        
+        # Fallback to local file
+        return self.load_used_anchors_from_file()
+    
+    def load_used_anchors_from_file(self):
+        """Fallback: Load used anchors from local file"""
+        if os.path.exists(ANCHORS_PATH):
+            try:
+                with open(ANCHORS_PATH, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
         return {}
     
     def save_used_anchors_to_supabase(self):
-        """Save used anchors to Supabase"""
+        """Save used anchors to Supabase with file fallback"""
         try:
             payload = {
                 'key': 'used_anchors',
@@ -345,9 +469,19 @@ class ProductionBlogGenerator:
             
             if response.status_code not in [200, 201]:
                 print(f"⚠️ Failed to save used anchors: {response.status_code}")
+                self.save_used_anchors_to_file()
                 
         except Exception as e:
             print(f"⚠️ Error saving used anchors: {e}")
+            self.save_used_anchors_to_file()
+    
+    def save_used_anchors_to_file(self):
+        """Fallback: Save used anchors to local file"""
+        try:
+            with open(ANCHORS_PATH, 'w') as f:
+                json.dump(self.used_anchors, f)
+        except Exception as e:
+            print(f"⚠️ Could not save used anchors to file: {e}")
     
     def _get_anchor_seen(self, key):
         """Helper: Get anchor set from persisted list"""
@@ -936,6 +1070,17 @@ class ProductionBlogGenerator:
         base_slug = blog_data['unique_slug']
         if self.slug_exists(base_slug):
             print(f"ℹ️ Skipping {blog_data['full_name']} — slug exists: {base_slug}")
+            # Record as posted so we advance the queue tomorrow
+            self.save_posted_player_to_supabase(
+                blog_data['full_name'],
+                blog_data['unique_slug'],
+                blog_data['content_hash']
+            )
+            # Also keep the content hash to reduce rework
+            self.content_hashes.add(blog_data['content_hash'])
+            self.save_content_hashes_to_supabase()
+            # Save anchor state for safety
+            self.save_used_anchors_to_supabase()
             return True
         
         # Staggered timing - skip delay if NO_DELAY env var is set
@@ -981,16 +1126,19 @@ class ProductionBlogGenerator:
             if response.status_code in [200, 201, 202]:
                 print(f"✅ Posted {blog_data['full_name']} to Webflow (Status: {response.status_code}) - {blog_data['word_count']} words")
                 
-                # Save to Supabase instead of local files
+                # Save to Supabase with file fallbacks
                 self.content_hashes.add(blog_data['content_hash'])
                 self.save_content_hashes_to_supabase()
                 
-                # Save posted player to Supabase
+                # Save posted player to state
                 self.save_posted_player_to_supabase(
                     blog_data['full_name'], 
                     blog_data['unique_slug'], 
                     blog_data['content_hash']
                 )
+                
+                # Save anchor state for safety
+                self.save_used_anchors_to_supabase()
                 
                 return True
             else:
@@ -1058,24 +1206,33 @@ class ProductionBlogGenerator:
         """Daily posting with Supabase state persistence - truly set and forget"""
         print(f"🚀 Starting DAILY production posting - {posts_per_day} new blogs")
         print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        print("✅ Supabase state persistence - truly set-and-forget daily posting")
+        print(f"📁 State persistence: {'Supabase + file fallback' if HAS_SUPABASE else 'file-only'} in {STATE_DIR}")
+        if HAS_SUPABASE:
+            print("✅ Supabase state persistence - truly set-and-forget daily posting")
+        else:
+            print("✅ File-based state persistence - truly set-and-forget daily posting")
         
-        # DEBUG: Test Supabase connection first
-        print("🔍 Testing Supabase connection...")
-        try:
-            test_response = requests.get(
-                f'{SUPABASE_URL}/rest/v1/players?limit=1',
-                headers=self.supabase_headers,
-                timeout=10
-            )
-            print(f"🔍 Supabase test response: {test_response.status_code}")
-            if test_response.status_code == 200:
-                print("✅ Supabase connection successful")
-            else:
-                print(f"❌ Supabase connection failed: {test_response.text}")
+        # DEBUG: Test Supabase connection first (if available)
+        if HAS_SUPABASE:
+            print("🔍 Testing Supabase connection...")
+            try:
+                test_response = requests.get(
+                    f'{SUPABASE_URL}/rest/v1/players?limit=1',
+                    headers=self.supabase_headers,
+                    timeout=10
+                )
+                print(f"🔍 Supabase test response: {test_response.status_code}")
+                if test_response.status_code == 200:
+                    print("✅ Supabase connection successful")
+                else:
+                    print(f"❌ Supabase connection failed: {test_response.text}")
+                    return
+            except Exception as e:
+                print(f"❌ Supabase connection error: {e}")
                 return
-        except Exception as e:
-            print(f"❌ Supabase connection error: {e}")
+        else:
+            print("❌ Supabase credentials are required to fetch player data (players & betting).")
+            print("   Set SUPABASE_URL and SUPABASE_ANON_KEY environment variables.")
             return
         
         # Fetch all players using ORIGINAL working method
