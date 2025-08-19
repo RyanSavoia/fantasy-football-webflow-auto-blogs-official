@@ -55,7 +55,53 @@ TEAM_ESPN_SLUGS = {
     'Tennessee Titans': 'ten', 'TEN': 'ten', 'Washington Commanders': 'wsh', 'WSH': 'wsh'
 }
 
-# FULL PLAYER NAME MAPPING
+# ESPN RANKINGS DATA (parsed from ESPN rankings) - Fixed Aaron Jones Sr. key
+ESPN_RANKINGS = {
+    'Ja\'Marr Chase': 1, 'Bijan Robinson': 2, 'Justin Jefferson': 3, 'Saquon Barkley': 4,
+    'Jahmyr Gibbs': 5, 'CeeDee Lamb': 6, 'Christian McCaffrey': 7, 'Puka Nacua': 8,
+    'Malik Nabers': 9, 'Amon-Ra St. Brown': 10, 'Ashton Jeanty': 11, 'De\'Von Achane': 12,
+    'Nico Collins': 13, 'Brian Thomas Jr.': 14, 'A.J. Brown': 15, 'Drake London': 16,
+    'Jonathan Taylor': 17, 'Josh Jacobs': 18, 'Derrick Henry': 19, 'Brock Bowers': 20,
+    'Trey McBride': 21, 'Bucky Irving': 22, 'Chase Brown': 23, 'Tee Higgins': 24,
+    'Tyreek Hill': 25, 'Ladd McConkey': 26, 'Davante Adams': 27, 'Josh Allen': 28,
+    'Lamar Jackson': 29, 'Jayden Daniels': 30, 'Jalen Hurts': 31, 'Kyren Williams': 32,
+    'James Cook': 33, 'Jaxon Smith-Njigba': 34, 'Terry McLaurin': 35, 'Garrett Wilson': 36,
+    'Omarion Hampton': 37, 'Kenneth Walker III': 38, 'Joe Burrow': 39, 'George Kittle': 40,
+    'Alvin Kamara': 41, 'Chuba Hubbard': 42, 'James Conner': 43, 'TreVeyon Henderson': 44,
+    'Mike Evans': 45, 'Marvin Harrison Jr.': 46, 'Xavier Worthy': 47, 'DK Metcalf': 48,
+    'D.J. Moore': 49, 'Rashee Rice': 50, 'Breece Hall': 51, 'D\'Andre Swift': 52,
+    'Zay Flowers': 53, 'Courtland Sutton': 54, 'Calvin Ridley': 55, 'DeVonta Smith': 56,
+    'Jaylen Waddle': 57, 'Jerry Jeudy': 58, 'Jameson Williams': 59, 'George Pickens': 60,
+    'Sam LaPorta': 61, 'Patrick Mahomes': 62, 'Baker Mayfield': 63, 'Rome Odunze': 64,
+    'Tetairoa McMillan': 65, 'Travis Hunter': 66, 'David Montgomery': 67, 'Aaron Jones Sr.': 68,
+    'T.J. Hockenson': 69, 'Tony Pollard': 70, 'RJ Harvey': 71, 'Isiah Pacheco': 72,
+    'Chris Godwin': 73, 'Jakobi Meyers': 74, 'Chris Olave': 75, 'Cooper Kupp': 76,
+    'Stefon Diggs': 77, 'Matthew Golden': 78, 'Jordan Addison': 79, 'Tyrone Tracy Jr.': 80,
+    'Jaylen Warren': 81, 'Kaleb Johnson': 82, 'Travis Kelce': 83, 'David Njoku': 84,
+    'Mark Andrews': 85, 'Evan Engram': 86, 'Bo Nix': 87, 'Kyler Murray': 88,
+    'Brock Purdy': 89, 'Joe Mixon': 90, 'Quinshon Judkins': 91, 'Brian Robinson Jr.': 92,
+    'J.K. Dobbins': 93, 'Rhamondre Stevenson': 94, 'Javonte Williams': 95, 'Khalil Shakir': 96,
+    'Jauan Jennings': 97, 'Deebo Samuel': 98, 'Ricky Pearsall': 99, 'Keon Coleman': 100
+}
+
+# Add duplicate key for Aaron Jones (handles both "Aaron Jones" and "Aaron Jones Sr.")
+ESPN_RANKINGS['Aaron Jones'] = 68
+
+# ESPN PLAYER INSIGHTS (paraphrased to avoid copyright)
+ESPN_INSIGHTS = {
+    'Ja\'Marr Chase': "Elite WR1 who dominated 2024 with league-leading metrics across targets, yards, and touchdowns. Strong first overall pick candidate.",
+    'Bijan Robinson': "Breakout RB who averaged 22+ fantasy points from Week 6 onward in 2024. Elite dual-threat entering age-23 season.",
+    'Justin Jefferson': "Proven WR1 who remained QB-proof in 2024, finishing top-5 despite quarterback changes. Six-year veteran at peak performance.",
+    'Saquon Barkley': "NFL Offensive Player of the Year who led in carries and scrimmage yards. High-volume runner entering age-28 campaign.",
+    'Jahmyr Gibbs': "Reigning fantasy RB1 with 20 total touchdowns. Elite dual-threat who dominated when Montgomery was out.",
+    'CeeDee Lamb': "Bounce-back candidate after down 2024. Three-time top-8 fantasy finisher getting Prescott back for 2025.",
+    'Christian McCaffrey': "Age-29 bounce-back candidate after injury-limited 2024. Elite when healthy but carries injury risk.",
+    'Puka Nacua': "Explosive target who averaged 22+ fantasy points in final stretch of 2024. Concerns about touchdown production persist.",
+    'Malik Nabers': "Record-setting rookie who led NFL in target share. Entering second year with improved quarterback situation.",
+    'Amon-Ra St. Brown': "Three-year consistency king with 105+ receptions annually. Career-high 12 touchdowns in 2024 campaign."
+}
+
+# FULL PLAYER NAME MAPPING (expanded with missing variants)
 PLAYER_NAME_MAPPING = {
     'C McCaffrey': 'Christian McCaffrey', 'C Lamb': 'CeeDee Lamb', 'J Chase': 'Ja\'Marr Chase',
     'J Jefferson': 'Justin Jefferson', 'AJ Brown': 'A.J. Brown', 'B Robinson': 'Bijan Robinson',
@@ -67,8 +113,16 @@ PLAYER_NAME_MAPPING = {
     'J Taylor': 'Jonathan Taylor', 'T Higgins': 'Tee Higgins', 'L McConkey': 'Ladd McConkey',
     'M Evans': 'Mike Evans', 'J Smith-Njigba': 'Jaxon Smith-Njigba', 'D Adams': 'Davante Adams',
     'J Jacobs': 'Josh Jacobs', 'B Hall': 'Breece Hall', 'T McLaurin': 'Terry McLaurin',
-    'M Harrison Jr': 'Marvin Harrison Jr.', 'DJ Moore': 'D.J. Moore', 'B Bowers': 'Brock Bowers'
+    'M Harrison Jr': 'Marvin Harrison Jr.', 'DJ Moore': 'D.J. Moore', 'B Bowers': 'Brock Bowers',
+    # Missing variants that GPT identified:
+    'A. St. Brown': 'Amon-Ra St. Brown', 'A St. Brown': 'Amon-Ra St. Brown',
+    'S LaPorta': 'Sam LaPorta', 'T Kelce': 'Travis Kelce', 'D Smith': 'DeVonta Smith',
+    'A Jones': 'Aaron Jones', 'Aaron Jones Sr.': 'Aaron Jones',
+    # Additional common variants:
+    'K Williams': 'Kyren Williams', 'B Bowers': 'Brock Bowers', 'T McBride': 'Trey McBride'
 }
+
+
 
 # KEYWORD PHRASE ROTATION (for diversity)
 KEYWORD_VARIATIONS = [
@@ -129,6 +183,26 @@ class ProductionBlogGenerator:
         self.content_hashes = self.load_content_hashes_from_supabase()
         self.posted_players = self.load_posted_players_from_supabase()
         self.used_anchors = self.load_used_anchors_from_supabase()
+    
+    def _canonical_player(self, raw):
+        """Canonicalize player names to handle variants and edge cases"""
+        name = (raw or "").strip()
+        
+        # Direct mapping first
+        if name in PLAYER_NAME_MAPPING:
+            return PLAYER_NAME_MAPPING[name]
+        
+        # Handle common patterns
+        canonical_map = {
+            'A. St. Brown': 'Amon-Ra St. Brown',
+            'A St. Brown': 'Amon-Ra St. Brown', 
+            'AJ Brown': 'A.J. Brown',
+            'DJ Moore': 'D.J. Moore',
+            'B Hall': 'Breece Hall',
+            'Aaron Jones Sr.': 'Aaron Jones Sr.',  # keep Sr. to match ESPN_RANKINGS
+        }
+        
+        return canonical_map.get(name, name)
     
     def init_supabase_state(self):
         """Initialize Supabase tables for state persistence"""
@@ -568,7 +642,7 @@ class ProductionBlogGenerator:
         data_ok, data_msg, completeness_score = self.check_data_completeness(player_data)
         
         # Get full player name and generate slug
-        full_name = PLAYER_NAME_MAPPING.get(player_data.get('name', 'Unknown'), player_data.get('name', 'Unknown'))
+        full_name = self._canonical_player(PLAYER_NAME_MAPPING.get(player_data.get('name', 'Unknown'), player_data.get('name', 'Unknown')))
         base_slug = full_name.lower().replace(' ', '-').replace('.', '').replace('\'', '')
         unique_slug = self.ensure_unique_slug(base_slug)
         
@@ -613,6 +687,10 @@ class ProductionBlogGenerator:
             
             f'<p>{"The market prices " + full_name + " higher than ESPN (#" + str(overall_rank) + " vs #" + str(espn_rank) + "), suggesting undervalued consensus opportunity." if espn_rank and overall_rank < espn_rank else "ESPN ranks " + full_name + " at #" + str(espn_rank) + " while market data suggests #" + str(overall_rank) + ", indicating potential overvaluation." if espn_rank and overall_rank > espn_rank else "Both market and ESPN align, but our market-driven analysis reveals deeper context ESPN misses."}</p>\n'
         )
+
+        # Add ESPN insight if available (paraphrased to avoid copyright)
+        if espn_data and espn_data.get('insight'):
+            post_body += f'<p><strong>Consensus View:</strong> {espn_data["insight"]}</p>\n'
 
         # Add sections in randomized order
         section_content = {
@@ -852,7 +930,13 @@ class ProductionBlogGenerator:
         return sports_article, faq_schema
     
     def post_to_webflow_enhanced(self, blog_data, delay_minutes=None):
-        """FIXED: Enhanced Webflow posting using _post_with_backoff"""
+        """FIXED: Enhanced Webflow posting with slug collision safety"""
+        
+        # Extra safety: Skip if slug already exists (belt-and-suspenders for overlapping jobs)
+        base_slug = blog_data['unique_slug']
+        if self.slug_exists(base_slug):
+            print(f"ℹ️ Skipping {blog_data['full_name']} — slug exists: {base_slug}")
+            return True
         
         # Staggered timing - skip delay if NO_DELAY env var is set
         if delay_minutes and os.getenv("NO_DELAY") != "1":
@@ -1098,7 +1182,7 @@ class ProductionBlogGenerator:
         print(f"🚀 SHIP-READY: Run daily with same command!")
     
     def fetch_detailed_player_data(self, player_name):
-        """FIXED: Use ORIGINAL working Supabase query method"""
+        """FIXED: Use ORIGINAL working Supabase query method + add ESPN data"""
         try:
             # Player info using ORIGINAL working method
             player_response = requests.get(
@@ -1125,9 +1209,20 @@ class ProductionBlogGenerator:
             # Combine data
             combined_data = {**player_info, **betting_data}
             
+            # Add ESPN data with improved name matching
+            full_name = self._canonical_player(PLAYER_NAME_MAPPING.get(player_name, player_name))
+            espn_rank = ESPN_RANKINGS.get(full_name)
+            espn_insight = ESPN_INSIGHTS.get(full_name, "")
+            
+            # Debug ESPN matching
+            if not espn_rank:
+                print(f"ℹ️ No ESPN rank found for: '{full_name}' (from '{player_name}')")
+            
+            espn_data = {'rank': espn_rank, 'insight': espn_insight} if espn_rank else None
+            
             return {
                 'player': combined_data,
-                'espn': None  # Add ESPN data if needed
+                'espn': espn_data
             }
             
         except Exception as e:
