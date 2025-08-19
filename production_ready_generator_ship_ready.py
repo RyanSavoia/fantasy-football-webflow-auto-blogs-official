@@ -522,6 +522,36 @@ class ProductionBlogGenerator:
         url = f"{SUPABASE_URL}{path}"
         return self._get(url + "?" + requests.compat.urlencode(params, doseq=True), self.supabase_headers)
     
+    def _patch_with_backoff(self, url, headers, json_payload, tries=3):
+        """PATCH with backoff for updating existing items"""
+        for i in range(tries):
+            try:
+                r = requests.patch(url, headers=headers, json=json_payload, timeout=30)
+                if r.status_code in (200, 202):
+                    return r
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep((2**i) * 2 + random.uniform(0, 1.5))
+                    continue
+                return r
+            except Exception:
+                if i < tries - 1:
+                    time.sleep((2**i) * 2 + random.uniform(0, 1.5))
+                else:
+                    raise
+    
+    def _get_item_by_slug(self, slug):
+        """Get existing Webflow item by slug"""
+        try:
+            r = self._get(
+                f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items?limit=1&filter[slug]={slug}',
+                self.webflow_headers
+            )
+            if r and r.status_code == 200:
+                items = r.json().get('items', [])
+                return items[0] if items else None
+        except Exception:
+            pass
+        return None
     def _post_with_backoff(self, url, headers, json_payload, tries=3):
         """FIXED: Reuse backoff logic for POSTs with jitter"""
         for i in range(tries):
@@ -1073,22 +1103,51 @@ class ProductionBlogGenerator:
     def post_to_webflow_enhanced(self, blog_data, delay_minutes=None):
         """FIXED: Enhanced Webflow posting with slug collision safety"""
         
-        # Extra safety: Skip if slug already exists (belt-and-suspenders for overlapping jobs)
+        # Extra safety: Check if slug exists and update instead of skip
         base_slug = blog_data['unique_slug']
         if os.getenv("SKIP_SLUG_CHECK") != "1" and self.slug_exists(base_slug):
-            print(f"ℹ️ Skipping {blog_data['full_name']} — slug exists: {base_slug}")
-            # Record as posted so we advance the queue tomorrow
-            self.save_posted_player_to_supabase(
-                blog_data['full_name'],
-                blog_data['unique_slug'],
-                blog_data['content_hash']
-            )
-            # Also keep the content hash to reduce rework
-            self.content_hashes.add(blog_data['content_hash'])
-            self.save_content_hashes_to_supabase()
-            # Save anchor state for safety
-            self.save_used_anchors_to_supabase()
-            return True
+            print(f"ℹ️ Slug exists for {blog_data['full_name']}: {base_slug} — updating item")
+            existing = self._get_item_by_slug(base_slug)
+            if not existing:
+                print("⚠️ Could not fetch existing item by slug; proceeding to create a new one.")
+            else:
+                # Make sure it's not draft/archived and refresh the content
+                update_payload = {
+                    "isDraft": False,
+                    "isArchived": False,
+                    "fieldData": self._filter_to_allowed(blog_data['fieldData_raw'])
+                }
+                pr = self._patch_with_backoff(
+                    f"https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items/{existing['id']}",
+                    self.webflow_headers,
+                    update_payload,
+                    tries=3
+                )
+                if pr and pr.status_code in (200, 202):
+                    print(f"✅ Updated existing item for {blog_data['full_name']}")
+                    
+                    # Log likely live URL
+                    try:
+                        coll_response = self._get(f"https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}", self.webflow_headers)
+                        if coll_response.status_code == 200:
+                            coll = coll_response.json()
+                            coll_slug = coll.get("slug") or coll.get("displaySlug") or "fantasy-football"
+                            print(f"🔗 Updated: https://thebettinginsider.com/{coll_slug}/{base_slug}")
+                    except Exception:
+                        pass
+                    
+                    self.content_hashes.add(blog_data['content_hash'])
+                    self.save_content_hashes_to_supabase()
+                    self.save_posted_player_to_supabase(
+                        blog_data['full_name'], 
+                        base_slug,
+                        blog_data['content_hash']
+                    )
+                    self.save_used_anchors_to_supabase()
+                    return True
+                else:
+                    print(f"⚠️ Failed to update existing item; will attempt to create a new one. Status={getattr(pr,'status_code',None)}")
+            # fall through to create a new item if update failed
         
         # Staggered timing - skip delay if NO_DELAY env var is set
         if delay_minutes and os.getenv("NO_DELAY") != "1":
@@ -1132,6 +1191,16 @@ class ProductionBlogGenerator:
             # Accept 200, 201, 202 as success
             if response.status_code in [200, 201, 202]:
                 print(f"✅ Posted {blog_data['full_name']} to Webflow (Status: {response.status_code}) - {blog_data['word_count']} words")
+                
+                # Log likely live URL
+                try:
+                    coll_response = self._get(f"https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}", self.webflow_headers)
+                    if coll_response.status_code == 200:
+                        coll = coll_response.json()
+                        coll_slug = coll.get("slug") or coll.get("displaySlug") or "fantasy-football"
+                        print(f"🔗 New: https://thebettinginsider.com/{coll_slug}/{filtered_data['slug']}")
+                except Exception:
+                    pass
                 
                 # Save to Supabase with file fallbacks
                 self.content_hashes.add(blog_data['content_hash'])
