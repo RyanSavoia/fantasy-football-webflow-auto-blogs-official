@@ -204,7 +204,14 @@ class ProductionBlogGenerator:
         if HAS_SUPABASE:
             self.init_supabase_state()
         
-        # Load state from Supabase with file fallbacks
+        # Load state from Supabase with file fallbacks (with reset option)
+        if os.getenv("RESET_STATE") == "1":
+            print("🔄 RESET_STATE=1 detected - clearing all state files")
+            for path in [POSTED_PATH, HASHES_PATH, ANCHORS_PATH]:
+                if os.path.exists(path):
+                    os.remove(path)
+                    print(f"🗑️ Deleted {path}")
+        
         self.content_hashes = self.load_content_hashes_from_supabase()
         self.posted_players = self.load_posted_players_from_supabase()
         self.used_anchors = self.load_used_anchors_from_supabase()
