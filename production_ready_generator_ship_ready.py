@@ -1075,7 +1075,7 @@ class ProductionBlogGenerator:
         
         # Extra safety: Skip if slug already exists (belt-and-suspenders for overlapping jobs)
         base_slug = blog_data['unique_slug']
-        if self.slug_exists(base_slug):
+        if os.getenv("SKIP_SLUG_CHECK") != "1" and self.slug_exists(base_slug):
             print(f"ℹ️ Skipping {blog_data['full_name']} — slug exists: {base_slug}")
             # Record as posted so we advance the queue tomorrow
             self.save_posted_player_to_supabase(
