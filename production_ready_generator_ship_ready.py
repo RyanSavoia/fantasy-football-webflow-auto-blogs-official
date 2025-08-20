@@ -32,6 +32,9 @@ WEBFLOW_API_TOKEN = os.getenv('WEBFLOW_API_TOKEN')
 WEBFLOW_SITE_ID = os.getenv('WEBFLOW_SITE_ID')
 WEBFLOW_COLLECTION_ID = os.getenv('WEBFLOW_COLLECTION_ID')
 
+# ✅ SEO: Collection path for correct "Next by Rank" URLs
+COLLECTION_PATH = os.getenv("WEBFLOW_COLLECTION_PATH", "fantasy-football-updates")
+
 # Supabase keys optional; code will fall back to files if API calls 404/fail
 HAS_SUPABASE = bool(SUPABASE_URL and SUPABASE_ANON_KEY)
 
@@ -919,6 +922,33 @@ class ProductionBlogGenerator:
         for q, a in faqs:
             post_body += f"<h3>{q}</h3>\n<p>{a}</p>\n\n"
 
+        # ✅ SEO: Add hub links for internal linking
+        position_lower = position.lower()
+        team_lower = team.lower().replace(' ', '-')
+        hub_links = f'''<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;margin:20px 0;">
+<strong>Explore More:</strong> 
+<a href="/fantasy-football/">All Rankings</a> • 
+<a href="/fantasy-football/{position_lower}/">{position} Rankings</a> • 
+<a href="/teams/{team_lower}/fantasy/">{team} Fantasy</a>
+</div>'''
+        post_body += hub_links
+
+        # ✅ SEO: Add "Next up by rank" navigation for pages/session boost
+        next_players = []
+        if all_players_data:
+            current_rank = int(overall_rank)
+            for p in all_players_data:
+                p_rank = int(p.get('overall_rank', 999))
+                if abs(p_rank - current_rank) <= 2 and p_rank != current_rank:
+                    p_name = self._canonical_player(PLAYER_NAME_MAPPING.get(p.get('name', ''), p.get('name', '')))
+                    p_slug = p_name.lower().replace(' ', '-').replace('.', '').replace('\'', '')
+                    next_players.append(f'<a href="/{COLLECTION_PATH}/{p_slug}">#{p_rank} {p_name}</a>')
+        
+        if next_players:
+            post_body += f'''<div style="border-top:1px solid #eee;padding-top:16px;margin-top:20px;">
+<strong>Next by Rank:</strong> {' • '.join(next_players[:4])}
+</div>'''
+
         # Methodology & sources with enhanced E-E-A-T (LINKS REMOVED AS REQUESTED)
         post_body += f'''<h2>How We Build These Projections</h2>
 
@@ -936,35 +966,28 @@ class ProductionBlogGenerator:
 <strong>⚠️ 21+ Disclaimer:</strong> Market lines change frequently. This analysis is for entertainment purposes only, not betting advice. <a href="https://www.ncpgambling.org/" target="_blank" rel="noopener nofollow">Problem gambling resources</a>. Check your local jurisdiction regarding sports betting.
 </div>'''
 
-        # Calculate word count for logging only (no gate applied)
-        clean_text = re.sub(r'<[^>]+>', '', post_body)
-        word_count = len(clean_text.split())
-        has_insight = td_line is not None and td_line > 7
-        has_comparables = bool(comparables_html)
-        
-        print(f"ℹ️ Content stats: {full_name} - {word_count} words, insight: {has_insight}, comps: {has_comparables}")
-        
-        # Only skip if missing critical market data (3+ missing fields)
-        # Word count gate completely removed
-
-        # Ensure varied keyword phrase (rotate every few posts)
-        keyword_index = len(self.posted_players) % len(KEYWORD_VARIATIONS)
-        post_body = self.guarantee_primary_keyword(post_body, keyword_index)
-        
-        # Generate schemas for separate CMS field with size guard
+        # ✅ SEO: One-and-done schema compute + inline inject
         sports_schema, faq_schema = self.generate_schemas(player_data, full_name, unique_slug, faqs)
         json_ld = self._safe_jsonld([sports_schema, faq_schema])
+        post_body += f'\n<script type="application/ld+json">{json_ld}</script>\n'
         
-        # Generate titles and meta with word-safe clamping
-        title = self.word_safe_clamp(f"{full_name} Fantasy 2025: Market-Based Outlook", 60)
-        meta = self.word_safe_clamp(f"{full_name}: market #{overall_rank} vs ESPN #{espn_rank or '—'}; TD line {td_line or 'N/A'}; Playoff SOS {player_data.get('playoff_sos_score', 'N/A')}.", 160)
+        # ✅ SEO: Better click-earning titles and meta descriptions
+        title = self.word_safe_clamp(f"{full_name} Fantasy Outlook 2025 (Vegas vs ESPN, #{overall_rank})", 60)
+        meta = self.word_safe_clamp(f"{full_name} market rank #{overall_rank} vs ESPN #{espn_rank or '—'}. TD line {td_line or 'N/A'}, playoff SOS {player_data.get('playoff_sos_score', 'N/A')}. Full breakdown, projections.", 160)
         
-        # Content hash check
+        # Content hash check (final)
         clean_content = re.sub(r'<[^>]+>', '', post_body)
         content_hash = hashlib.sha1(clean_content.encode()).hexdigest()
         
         if content_hash in self.content_hashes:
             print(f"⚠️ Duplicate content detected for {full_name}")
+            # prevent repeat attempts: remember the hash + mark player posted
+            self.content_hashes.add(content_hash)
+            try:
+                self.save_content_hashes_to_supabase()
+            except Exception:
+                self.save_content_hashes_to_file()
+            self.save_posted_player_to_supabase(self._canon(full_name), unique_slug, content_hash)
             return None
         
         # Featured image with guaranteed fallback to Webflow CDN
@@ -976,7 +999,7 @@ class ProductionBlogGenerator:
         main_img_url = featured_image
         
         # Generate summary for potential required field
-        summary = self.word_safe_clamp(clean_text.strip(), 220)
+        summary = self.word_safe_clamp(clean_content.strip(), 220)
         
         # Prepare complete field data (will be filtered to allowed fields in posting)
         fieldData_raw = {
@@ -987,7 +1010,7 @@ class ProductionBlogGenerator:
             "meta-title": title,
             "meta-description": meta,
             "json-ld": json_ld,
-            "canonical-url": f"https://thebettinginsider.com/fantasy-football/{unique_slug}",
+            "canonical-url": f"https://thebettinginsider.com/{COLLECTION_PATH}/{unique_slug}",
             "noindex": not data_ok,
 
             # Optional fields if your collection has them
@@ -998,7 +1021,6 @@ class ProductionBlogGenerator:
             "fantasy-score": fantasy_score,
             "rush-line": rush_line,
             "rec-line": rec_line,
-            "td-line": td_line,
             "playoff-sos": player_data.get('playoff_sos_score'),
 
             # IMAGE FIELDS (objects per Webflow v2 API requirements) - GUARANTEED NON-NULL
@@ -1009,7 +1031,7 @@ class ProductionBlogGenerator:
             # Likely required fields based on schema
             "post-summary": summary,
             "featured": False,
-            "url": f"https://thebettinginsider.com/fantasy-football/{unique_slug}",
+            "url": f"https://thebettinginsider.com/{COLLECTION_PATH}/{unique_slug}",
 
             # Optional / may or may not exist in your schema:
             "status": "published" if data_ok else "thin_content_gate",
@@ -1029,7 +1051,7 @@ class ProductionBlogGenerator:
             'should_index': data_ok,
             'content_hash': content_hash,
             'completeness_score': completeness_score,
-            'word_count': word_count,
+            'word_count': len(clean_content.split()),
             'unique_slug': unique_slug
         }
     
@@ -1068,7 +1090,7 @@ class ProductionBlogGenerator:
             "keywords": [f"{full_name} fantasy 2025", f"{player_data.get('position', 'NFL')} rankings"],
             "mainEntityOfPage": {
                 "@type": "WebPage",
-                "@id": f"https://thebettinginsider.com/fantasy-football/{slug}"
+                "@id": f"https://thebettinginsider.com/{COLLECTION_PATH}/{slug}"
             }
         }
         
@@ -1185,67 +1207,41 @@ class ProductionBlogGenerator:
                 pass
     
     def publish_webflow_site(self, publish_custom=True, publish_staging=True):
-        """FIXED: Publish using Webflow API v2 (customDomains + optional staging)."""
+        """✅ FIXED: Clean publish method with safe error handling"""
         try:
-            # Fetch custom domain IDs (v2)
             domain_ids = []
             if publish_custom:
                 r = self._get(
                     f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/custom_domains',
                     self.webflow_headers
                 )
-                r.raise_for_status()
-                data = r.json()
-                domain_ids = [d["id"] for d in data.get("customDomains", []) if d.get("id")]
-            
-            # Build v2 publish payload
+                if r and r.status_code == 200:
+                    data = r.json()
+                    domain_ids = [d["id"] for d in data.get("customDomains", []) if d.get("id")]
+                else:
+                    print(f"⚠️ Could not fetch custom domains (status={getattr(r, 'status_code', None)}). Publishing to staging only.")
+                    publish_custom = False
+
             payload = {"publishToWebflowSubdomain": bool(publish_staging)}
-            if domain_ids:
+            if publish_custom and domain_ids:
                 payload["customDomains"] = domain_ids
-            
+
             print("DEBUG publish payload:", payload, flush=True)
-            
+
             resp = self._post_with_backoff(
                 f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
                 self.webflow_headers,
                 payload,
                 tries=3
             )
-            
-            if resp.status_code in (200, 202):
+
+            if resp and resp.status_code in (200, 202):
                 print("✅ Webflow site publish queued")
                 self.ping_search_engines()
                 return True
-            
-            print(f"❌ Failed to publish site: {resp.status_code} {resp.text}")
+
+            print(f"❌ Failed to publish site: {getattr(resp, 'status_code', None)} {getattr(resp, 'text', '')}")
             return False
-            
-        except Exception as e:
-            print(f"❌ Error publishing site: {e}")
-            return False
-            
-            # Build v2 publish payload
-            payload = {"publishToWebflowSubdomain": bool(publish_staging)}
-            if domain_ids:
-                payload["customDomains"] = domain_ids
-            
-            print("DEBUG publish payload:", payload, flush=True)
-            
-            resp = self._post_with_backoff(
-                f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
-                self.webflow_headers,
-                payload,
-                tries=3
-            )
-            
-            if resp.status_code in (200, 202):
-                print("✅ Webflow site publish queued")
-                self.ping_search_engines()
-                return True
-            
-            print(f"❌ Failed to publish site: {resp.status_code} {resp.text}")
-            return False
-            
         except Exception as e:
             print(f"❌ Error publishing site: {e}")
             return False
@@ -1306,19 +1302,13 @@ class ProductionBlogGenerator:
             print(f"❌ Error fetching players: {e}")
             return
         
-        # ✅ FIX: Skip top 9 players forever, start from #10, maintain rank order
+        # ✅ REMOVED: Don't permanently skip top 9 - let them get posted eventually
         posted_set = set(self._canon(n) for n in self.posted_players)
         unposted_players = [p for p in all_players if self._canon(p['name']) not in posted_set]
         
-        # Force skip top 9 players (ranks 1-9) - never post them - FIXED: Handle string ranks
-        unposted_players = [p for p in unposted_players if int(p.get('overall_rank', 999)) > 9]
-        print(f"🚫 Skipped top 9 players - starting from rank 10+")
-        
-        # ✅ FIX: Sort by rank to maintain sequential order (no more random offsets)
+        # ✅ FIX: Sort by rank to maintain sequential order
         unposted_players = sorted(unposted_players, key=lambda x: int(x.get('overall_rank', 999)))
         print(f"📊 Next up: ranks {[int(p.get('overall_rank', 999)) for p in unposted_players[:5]]}")
-        
-        # Remove the rolling offset entirely - we want sequential order
         
         daily_batch = unposted_players[:posts_per_day]
         
@@ -1400,6 +1390,7 @@ class ProductionBlogGenerator:
         print(f"✅ ESPN + methodology links removed")
         print(f"✅ True daily deduplication")
         print(f"✅ FIXED: Name canonicalization prevents repeats")
+        print(f"✅ SEO: Inline JSON-LD, hub links, better titles")
         print(f"🚀 SHIP-READY: Run daily with same command!")
     
     def fetch_detailed_player_data(self, player_name):
@@ -1463,12 +1454,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"🔍 DEBUG: Args parsed: posts={args.posts}, test={args.test}")
     
-    print("🛡️ DAILY Production Blog Generator v2 - FIXED")
+    print("🛡️ DAILY Production Blog Generator v2 - FIXED + SEO")
     print("✅ Supabase state persistence")
     print("✅ Author link removed")  
     print("✅ ESPN + methodology links removed")
     print("✅ True daily posting without duplication")
     print("✅ FIXED: Name canonicalization prevents repeats")
+    print("✅ SEO: Inline JSON-LD, hub links, better titles")
     print("🔐 Environment variables validated")
     
     print("🔍 DEBUG: Creating generator instance...")
