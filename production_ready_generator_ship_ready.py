@@ -1268,15 +1268,19 @@ class ProductionBlogGenerator:
             print(f"❌ Error fetching players: {e}")
             return
         
-        # ✅ FIX: Canonicalize both sides when filtering
+        # ✅ FIX: Skip top 9 players forever, start from #10, maintain rank order
         posted_set = set(self._canon(n) for n in self.posted_players)
         unposted_players = [p for p in all_players if self._canon(p['name']) not in posted_set]
         
-        # Optional: Rolling offset safety net if state fails
-        if not self.posted_players:  # Empty state - use rolling offset
-            day_offset = int(datetime.now(timezone.utc).strftime("%j")) % max(1, len(unposted_players))
-            unposted_players = unposted_players[day_offset:] + unposted_players[:day_offset]
-            print(f"🔄 Empty state detected - using day offset {day_offset}")
+        # Force skip top 9 players (ranks 1-9) - never post them
+        unposted_players = [p for p in unposted_players if p.get('overall_rank', 999) > 9]
+        print(f"🚫 Skipped top 9 players - starting from rank 10+")
+        
+        # ✅ FIX: Sort by rank to maintain sequential order (no more random offsets)
+        unposted_players = sorted(unposted_players, key=lambda x: x.get('overall_rank', 999))
+        print(f"📊 Next up: ranks {[p.get('overall_rank') for p in unposted_players[:5]]}")
+        
+        # Remove the rolling offset entirely - we want sequential order
         
         daily_batch = unposted_players[:posts_per_day]
         
