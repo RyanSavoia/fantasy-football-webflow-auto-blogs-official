@@ -971,6 +971,10 @@ class ProductionBlogGenerator:
         json_ld = self._safe_jsonld([sports_schema, faq_schema])
         post_body += f'\n<script type="application/ld+json">{json_ld}</script>\n'
         
+        # Ensure varied keyword phrase (rotate every few posts)
+        keyword_index = len(self.posted_players) % len(KEYWORD_VARIATIONS)
+        post_body = self.guarantee_primary_keyword(post_body, keyword_index)
+        
         # ✅ SEO: Better click-earning titles and meta descriptions
         title = self.word_safe_clamp(f"{full_name} Fantasy Outlook 2025 (Vegas vs ESPN, #{overall_rank})", 60)
         meta = self.word_safe_clamp(f"{full_name} market rank #{overall_rank} vs ESPN #{espn_rank or '—'}. TD line {td_line or 'N/A'}, playoff SOS {player_data.get('playoff_sos_score', 'N/A')}. Full breakdown, projections.", 160)
@@ -1021,6 +1025,7 @@ class ProductionBlogGenerator:
             "fantasy-score": fantasy_score,
             "rush-line": rush_line,
             "rec-line": rec_line,
+            "td-line": td_line,
             "playoff-sos": player_data.get('playoff_sos_score'),
 
             # IMAGE FIELDS (objects per Webflow v2 API requirements) - GUARANTEED NON-NULL
@@ -1302,9 +1307,13 @@ class ProductionBlogGenerator:
             print(f"❌ Error fetching players: {e}")
             return
         
-        # ✅ REMOVED: Don't permanently skip top 9 - let them get posted eventually
+        # ✅ FIXED: Skip top 9 players forever, start from rank 10+
         posted_set = set(self._canon(n) for n in self.posted_players)
         unposted_players = [p for p in all_players if self._canon(p['name']) not in posted_set]
+        
+        # ✅ FIX: Skip top 9 players (ranks 1-9) - never post them
+        unposted_players = [p for p in unposted_players if int(p.get('overall_rank', 999)) > 9]
+        print(f"🚫 Skipped top 9 players - starting from rank 10+")
         
         # ✅ FIX: Sort by rank to maintain sequential order
         unposted_players = sorted(unposted_players, key=lambda x: int(x.get('overall_rank', 999)))
