@@ -145,8 +145,6 @@ PLAYER_NAME_MAPPING = {
     'T McBride': 'Trey McBride', 'T. McBride': 'Trey McBride'
 }
 
-
-
 # KEYWORD PHRASE ROTATION (for diversity)
 KEYWORD_VARIATIONS = [
     "vegas backed fantasy football rankings",
@@ -216,6 +214,12 @@ class ProductionBlogGenerator:
         self.posted_players = self.load_posted_players_from_supabase()
         self.used_anchors = self.load_used_anchors_from_supabase()
     
+    def _canon(self, s: str) -> str:
+        """✅ FIX: Canonicalize player names for consistent state tracking"""
+        if not s: return ""
+        s = s.strip()
+        return self._canonical_player(PLAYER_NAME_MAPPING.get(s, s))
+    
     def _canonical_player(self, raw):
         """Canonicalize player names to handle variants and edge cases"""
         name = (raw or "").strip()
@@ -284,9 +288,9 @@ class ProductionBlogGenerator:
     
     def load_content_hashes_from_file(self):
         """Fallback: Load content hashes from local file"""
-        if os.path.exists('content_hashes.json'):
+        if os.path.exists(HASHES_PATH):
             try:
-                with open('content_hashes.json', 'r') as f:
+                with open(HASHES_PATH, 'r') as f:
                     return set(json.load(f))
             except Exception:
                 pass
@@ -319,13 +323,13 @@ class ProductionBlogGenerator:
     def save_content_hashes_to_file(self):
         """Fallback: Save content hashes to local file"""
         try:
-            with open('content_hashes.json', 'w') as f:
+            with open(HASHES_PATH, 'w') as f:
                 json.dump(list(self.content_hashes), f)
         except Exception as e:
             print(f"⚠️ Could not save content hashes to file: {e}")
     
     def load_posted_players_from_supabase(self):
-        """Load posted players from Supabase with file fallback"""
+        """✅ FIXED: Load posted players from Supabase with canonical name matching"""
         try:
             response = self._get(
                 f'{SUPABASE_URL}/rest/v1/posted_articles?select=player_name',
@@ -333,7 +337,9 @@ class ProductionBlogGenerator:
             )
             if response.status_code == 200:
                 data = response.json()
-                return [item['player_name'] for item in data]
+                # ✅ FIX: Canonicalize loaded names
+                posted = [self._canon(item['player_name']) for item in data]
+                return posted
         except Exception as e:
             print(f"⚠️ Could not load posted players from Supabase: {e}")
         
@@ -341,11 +347,13 @@ class ProductionBlogGenerator:
         return self.load_posted_players_from_file()
     
     def load_posted_players_from_file(self):
-        """Fallback: Load posted players from local file"""
+        """✅ FIXED: Load posted players from local file with canonicalization"""
         if os.path.exists(POSTED_PATH):
             try:
                 with open(POSTED_PATH, 'r') as f:
                     data = json.load(f)
+                    # ✅ FIX: Canonicalize file names too
+                    data = [self._canon(x) for x in data]
                     print(f"📁 Loaded {len(data)} posted players from file")
                     return data
             except Exception:
@@ -353,21 +361,25 @@ class ProductionBlogGenerator:
         return []
     
     def save_posted_player_to_file(self, player_name):
-        """Fallback: Save posted player to local file"""
+        """✅ FIXED: Save canonical posted player to local file"""
         try:
-            if player_name not in self.posted_players:
-                self.posted_players.append(player_name)
+            # ✅ FIX: Canonicalize before saving
+            c = self._canon(player_name)
+            if c not in self.posted_players:
+                self.posted_players.append(c)
                 with open(POSTED_PATH, 'w') as f:
                     json.dump(self.posted_players, f, indent=2)
-                print(f"📁 Saved {player_name} to posted_players.json")
+                print(f"📁 Saved {c} to posted_players.json")
         except Exception as e:
             print(f"⚠️ Could not save to file: {e}")
     
     def save_posted_player_to_supabase(self, player_name, slug, content_hash):
-        """Save individual posted player to Supabase with file fallback"""
+        """✅ FIXED: Save canonical posted player to Supabase with file fallback"""
         try:
+            # ✅ FIX: Canonicalize first
+            c = self._canon(player_name)
             payload = {
-                'player_name': player_name,
+                'player_name': c,
                 'slug': slug,
                 'content_hash': content_hash,
                 'created_at': datetime.now(timezone.utc).isoformat()
@@ -381,55 +393,22 @@ class ProductionBlogGenerator:
             )
             
             if response.status_code in [200, 201]:
-                print(f"📊 Saved {player_name} to posted_articles table")
+                print(f"📊 Saved {c} to posted_articles table")
+                # ✅ FIX: Update in-memory list when Supabase save succeeds
+                if c not in self.posted_players:
+                    self.posted_players.append(c)
                 return True
             else:
                 print(f"⚠️ Failed to save posted player: {response.status_code}")
-                # Fallback to file
-                self.save_posted_player_to_file(player_name)
+                # ✅ FIX: Keep it canonical in file fallback too
+                self.save_posted_player_to_file(c)
                 return False
                 
         except Exception as e:
             print(f"⚠️ Error saving posted player: {e}")
-            # Fallback to file
-            self.save_posted_player_to_file(player_name)
+            # ✅ FIX: Keep it canonical in file fallback too
+            self.save_posted_player_to_file(c)
             return False
-    
-    def load_content_hashes_from_file(self):
-        """Fallback: Load content hashes from local file"""
-        if os.path.exists(HASHES_PATH):
-            try:
-                with open(HASHES_PATH, 'r') as f:
-                    return set(json.load(f))
-            except Exception:
-                pass
-        return set()
-    
-    def save_content_hashes_to_file(self):
-        """Fallback: Save content hashes to local file"""
-        try:
-            with open(HASHES_PATH, 'w') as f:
-                json.dump(list(self.content_hashes), f)
-        except Exception as e:
-            print(f"⚠️ Could not save content hashes to file: {e}")
-    
-    def load_content_hashes_from_file(self):
-        """Fallback: Load content hashes from local file"""
-        if os.path.exists(HASHES_PATH):
-            try:
-                with open(HASHES_PATH, 'r') as f:
-                    return set(json.load(f))
-            except Exception:
-                pass
-        return set()
-    
-    def save_content_hashes_to_file(self):
-        """Fallback: Save content hashes to local file"""
-        try:
-            with open(HASHES_PATH, 'w') as f:
-                json.dump(list(self.content_hashes), f)
-        except Exception as e:
-            print(f"⚠️ Could not save content hashes to file: {e}")
     
     def load_used_anchors_from_supabase(self):
         """Load used anchors from Supabase with file fallback"""
@@ -552,6 +531,7 @@ class ProductionBlogGenerator:
         except Exception:
             pass
         return None
+        
     def _post_with_backoff(self, url, headers, json_payload, tries=3):
         """FIXED: Reuse backoff logic for POSTs with jitter"""
         for i in range(tries):
@@ -1160,9 +1140,9 @@ class ProductionBlogGenerator:
                 self.content_hashes.add(blog_data['content_hash'])
                 self.save_content_hashes_to_supabase()
                 
-                # Save posted player to state
+                # ✅ FIX: Save canonical posted player to state
                 self.save_posted_player_to_supabase(
-                    blog_data['full_name'], 
+                    self._canon(blog_data['full_name']),
                     blog_data['unique_slug'], 
                     blog_data['content_hash']
                 )
@@ -1233,7 +1213,7 @@ class ProductionBlogGenerator:
             return False
     
     def run_daily_posting(self, posts_per_day=9):
-        """Daily posting with Supabase state persistence - truly set and forget"""
+        """✅ FIXED: Daily posting with bulletproof name canonicalization - truly set and forget"""
         print(f"🚀 Starting DAILY production posting - {posts_per_day} new blogs")
         print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         print(f"📁 State persistence: {'Supabase + file fallback' if HAS_SUPABASE else 'file-only'} in {STATE_DIR}")
@@ -1288,8 +1268,16 @@ class ProductionBlogGenerator:
             print(f"❌ Error fetching players: {e}")
             return
         
-        # Get unposted players (using Supabase-persisted state)
-        unposted_players = [p for p in all_players if p['name'] not in self.posted_players]
+        # ✅ FIX: Canonicalize both sides when filtering
+        posted_set = set(self._canon(n) for n in self.posted_players)
+        unposted_players = [p for p in all_players if self._canon(p['name']) not in posted_set]
+        
+        # Optional: Rolling offset safety net if state fails
+        if not self.posted_players:  # Empty state - use rolling offset
+            day_offset = int(datetime.now(timezone.utc).strftime("%j")) % max(1, len(unposted_players))
+            unposted_players = unposted_players[day_offset:] + unposted_players[:day_offset]
+            print(f"🔄 Empty state detected - using day offset {day_offset}")
+        
         daily_batch = unposted_players[:posts_per_day]
         
         print(f"📝 Today's batch: {len(daily_batch)} new players")
@@ -1336,7 +1324,10 @@ class ProductionBlogGenerator:
                 delay = random.randint(1, 4) if i > 0 else 0
                 if self.post_to_webflow_enhanced(blog_data, delay):
                     successful_posts += 1
-                    self.posted_players.append(player_name)
+                    # ✅ FIX: Append canonical name to in-memory list
+                    canonical_name = self._canon(player_name)
+                    if canonical_name not in self.posted_players:
+                        self.posted_players.append(canonical_name)
                     self.save_used_anchors_to_supabase()
                 else:
                     failed_posts.append(player_name)
@@ -1363,9 +1354,10 @@ class ProductionBlogGenerator:
             
         print(f"\n🎯 Daily posting features:")
         print(f"✅ Supabase state persistence (no more JSON files)")
-        print(f"✅ Author name unlinked")
+        print(f"✅ Author name unlinked")  
         print(f"✅ ESPN + methodology links removed")
         print(f"✅ True daily deduplication")
+        print(f"✅ FIXED: Name canonicalization prevents repeats")
         print(f"🚀 SHIP-READY: Run daily with same command!")
     
     def fetch_detailed_player_data(self, player_name):
@@ -1429,11 +1421,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"🔍 DEBUG: Args parsed: posts={args.posts}, test={args.test}")
     
-    print("🛡️ DAILY Production Blog Generator v2")
+    print("🛡️ DAILY Production Blog Generator v2 - FIXED")
     print("✅ Supabase state persistence")
     print("✅ Author link removed")  
     print("✅ ESPN + methodology links removed")
     print("✅ True daily posting without duplication")
+    print("✅ FIXED: Name canonicalization prevents repeats")
     print("🔐 Environment variables validated")
     
     print("🔍 DEBUG: Creating generator instance...")
@@ -1451,6 +1444,13 @@ if __name__ == "__main__":
         print(f"📋 Available Webflow fields: {sorted(fields)}")
         print(f"🔗 Anchor diversity tracker initialized: {generator.used_anchors}")
         print(f"📊 Currently posted players: {len(generator.posted_players)}")
+        
+        # ✅ NEW: Test name canonicalization
+        test_names = ["J. Chase", "J Chase", "Ja'Marr Chase"]
+        print(f"🧪 Name canonicalization test:")
+        for name in test_names:
+            canon = generator._canon(name)
+            print(f"  '{name}' → '{canon}'")
     else:
         print("🔍 DEBUG: Starting daily posting...")
         generator.run_daily_posting(args.posts)
