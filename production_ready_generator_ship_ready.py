@@ -142,7 +142,19 @@ PLAYER_NAME_MAPPING = {
     'D. Samuel': 'Deebo Samuel', 'D Samuel': 'Deebo Samuel',
     # Additional common variants:
     'K Williams': 'Kyren Williams', 'K. Williams': 'Kyren Williams', 
-    'T McBride': 'Trey McBride', 'T. McBride': 'Trey McBride'
+    'T McBride': 'Trey McBride', 'T. McBride': 'Trey McBride',
+    # ✅ FIX: Add missing mappings from your log
+    'A. Jeanty': 'Ashton Jeanty', 'A Jeanty': 'Ashton Jeanty',
+    'B. Thomas Jr.': 'Brian Thomas Jr.', 'B Thomas Jr.': 'Brian Thomas Jr.',
+    'T. McMillan': 'Tetairoa McMillan', 'T McMillan': 'Tetairoa McMillan',
+    'R. Odunze': 'Rome Odunze', 'R Odunze': 'Rome Odunze',
+    'D. Swift': 'D\'Andre Swift', 'D Swift': 'D\'Andre Swift',
+    'T. Pollard': 'Tony Pollard', 'T Pollard': 'Tony Pollard',
+    'O. Hampton': 'Omarion Hampton', 'O Hampton': 'Omarion Hampton',
+    'J. Jeudy': 'Jerry Jeudy', 'J Jeudy': 'Jerry Jeudy',
+    'J. Meyers': 'Jakobi Meyers', 'J Meyers': 'Jakobi Meyers',
+    'T. Henderson': 'TreVeyon Henderson', 'T Henderson': 'TreVeyon Henderson',
+    'J. Jennings': 'Jauan Jennings', 'J Jennings': 'Jauan Jennings'
 }
 
 # KEYWORD PHRASE ROTATION (for diversity)
@@ -1211,6 +1223,32 @@ class ProductionBlogGenerator:
         except Exception as e:
             print(f"❌ Error publishing site: {e}")
             return False
+            
+            # Build v2 publish payload
+            payload = {"publishToWebflowSubdomain": bool(publish_staging)}
+            if domain_ids:
+                payload["customDomains"] = domain_ids
+            
+            print("DEBUG publish payload:", payload, flush=True)
+            
+            resp = self._post_with_backoff(
+                f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
+                self.webflow_headers,
+                payload,
+                tries=3
+            )
+            
+            if resp.status_code in (200, 202):
+                print("✅ Webflow site publish queued")
+                self.ping_search_engines()
+                return True
+            
+            print(f"❌ Failed to publish site: {resp.status_code} {resp.text}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error publishing site: {e}")
+            return False
     
     def run_daily_posting(self, posts_per_day=9):
         """✅ FIXED: Daily posting with bulletproof name canonicalization - truly set and forget"""
@@ -1272,13 +1310,13 @@ class ProductionBlogGenerator:
         posted_set = set(self._canon(n) for n in self.posted_players)
         unposted_players = [p for p in all_players if self._canon(p['name']) not in posted_set]
         
-        # Force skip top 9 players (ranks 1-9) - never post them
-        unposted_players = [p for p in unposted_players if p.get('overall_rank', 999) > 9]
+        # Force skip top 9 players (ranks 1-9) - never post them - FIXED: Handle string ranks
+        unposted_players = [p for p in unposted_players if int(p.get('overall_rank', 999)) > 9]
         print(f"🚫 Skipped top 9 players - starting from rank 10+")
         
         # ✅ FIX: Sort by rank to maintain sequential order (no more random offsets)
-        unposted_players = sorted(unposted_players, key=lambda x: x.get('overall_rank', 999))
-        print(f"📊 Next up: ranks {[p.get('overall_rank') for p in unposted_players[:5]]}")
+        unposted_players = sorted(unposted_players, key=lambda x: int(x.get('overall_rank', 999)))
+        print(f"📊 Next up: ranks {[int(p.get('overall_rank', 999)) for p in unposted_players[:5]]}")
         
         # Remove the rolling offset entirely - we want sequential order
         
