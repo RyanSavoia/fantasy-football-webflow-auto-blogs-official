@@ -1,4 +1,10 @@
-# production_ready_generator_ship_ready_v3.py - Daily posting with true dedupe by rank
+# production_ready_generator_ship_ready_v4.py
+# Daily posting to Webflow with Supabase state
+# - TRUE dedupe by rank (persisted)
+# - One-time seeding of posted_ranks from prior posts
+# - Extra Webflow slug-exists guard before posting
+# - File fallbacks for all state
+
 import json
 import requests
 import os
@@ -10,33 +16,29 @@ import html
 import sys
 from datetime import datetime, timezone
 
-# Fix stdout buffering for Render logs
+# ---------- I/O & Env ----------
 try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
 except Exception:
     pass  # Py<3.7 fallback
 
-# 🔐 SECURITY: Environment variables with validation - Supabase optional, Webflow required
 REQUIRED_ENV_VARS = ['WEBFLOW_API_TOKEN', 'WEBFLOW_SITE_ID', 'WEBFLOW_COLLECTION_ID']
+missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if missing:
+    raise ValueError(f"🔐 CRITICAL: Missing required environment variables: {', '.join(missing)}")
 
-missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
-if missing_vars:
-    raise ValueError(f"🔐 CRITICAL: Missing required environment variables: {', '.join(missing_vars)}")
-
-# Load environment variables (Supabase optional)
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY')
 WEBFLOW_API_TOKEN = os.getenv('WEBFLOW_API_TOKEN')
 WEBFLOW_SITE_ID = os.getenv('WEBFLOW_SITE_ID')
 WEBFLOW_COLLECTION_ID = os.getenv('WEBFLOW_COLLECTION_ID')
 
-# ✅ SEO: Collection path for correct "Next by Rank" URLs
 COLLECTION_PATH = os.getenv("WEBFLOW_COLLECTION_PATH", "fantasy-football-updates")
 
 # Optional exclusions
-EXCLUDE_TOP_N = int(os.getenv("EXCLUDE_TOP_N", "0"))  # e.g., 9 to always skip ranks 1..9
-EXCLUDE_RANKS_ENV = os.getenv("EXCLUDE_RANKS", "")    # e.g., "1,2,3,11,13"
+EXCLUDE_TOP_N = int(os.getenv("EXCLUDE_TOP_N", "0"))      # e.g., 9
+EXCLUDE_RANKS_ENV = os.getenv("EXCLUDE_RANKS", "")        # e.g., "1,2,3,11,13"
 EXCLUDE_RANKS_EXTRA = set()
 if EXCLUDE_RANKS_ENV.strip():
     try:
@@ -44,20 +46,17 @@ if EXCLUDE_RANKS_ENV.strip():
     except Exception:
         EXCLUDE_RANKS_EXTRA = set()
 
-# Supabase optional; code will fall back to files if API calls 404/fail
 HAS_SUPABASE = bool(SUPABASE_URL and SUPABASE_ANON_KEY)
 
-# State persistence configuration
 STATE_DIR = os.getenv("STATE_DIR", ".")
+os.makedirs(STATE_DIR, exist_ok=True)
+
 POSTED_PATH = os.path.join(STATE_DIR, "posted_players.json")
 HASHES_PATH = os.path.join(STATE_DIR, "content_hashes.json")
 ANCHORS_PATH = os.path.join(STATE_DIR, "used_anchors.json")
-POSTED_RANKS_PATH = os.path.join(STATE_DIR, "posted_ranks.json")  # NEW
+POSTED_RANKS_PATH = os.path.join(STATE_DIR, "posted_ranks.json")
 
-# Ensure state directory exists
-os.makedirs(STATE_DIR, exist_ok=True)
-
-# TEAM ESPN SLUG MAPPING (expanded with abbreviations)
+# ---------- Static Data ----------
 TEAM_ESPN_SLUGS = {
     'Arizona Cardinals': 'ari', 'ARI': 'ari', 'Atlanta Falcons': 'atl', 'ATL': 'atl',
     'Baltimore Ravens': 'bal', 'BAL': 'bal', 'Buffalo Bills': 'buf', 'BUF': 'buf',
@@ -77,7 +76,6 @@ TEAM_ESPN_SLUGS = {
     'Tennessee Titans': 'ten', 'TEN': 'ten', 'Washington Commanders': 'wsh', 'WSH': 'wsh'
 }
 
-# ESPN RANKINGS DATA (subset shown; extend as needed—safe if missing)
 ESPN_RANKINGS = {
     'Ja\'Marr Chase': 1, 'Bijan Robinson': 2, 'Justin Jefferson': 3, 'Saquon Barkley': 4,
     'Jahmyr Gibbs': 5, 'CeeDee Lamb': 6, 'Christian McCaffrey': 7, 'Puka Nacua': 8,
@@ -87,25 +85,24 @@ ESPN_RANKINGS = {
     'Trey McBride': 21, 'Bucky Irving': 22, 'Chase Brown': 23, 'Tee Higgins': 24,
     'Tyreek Hill': 25, 'Ladd McConkey': 26, 'Davante Adams': 27, 'Josh Allen': 28,
     'Lamar Jackson': 29, 'Jalen Hurts': 31, 'Kyren Williams': 32, 'James Cook': 33,
-    'Jaxon Smith-Njigba': 34, 'Terry McLaurin': 35, 'Garrett Wilson': 36,
-    'Omarion Hampton': 37, 'Kenneth Walker III': 38, 'Joe Burrow': 39, 'George Kittle': 40,
-    'Alvin Kamara': 41, 'Chuba Hubbard': 42, 'James Conner': 43, 'TreVeyon Henderson': 44,
-    'Mike Evans': 45, 'Marvin Harrison Jr.': 46, 'Xavier Worthy': 47, 'DK Metcalf': 48,
-    'D.J. Moore': 49, 'Rashee Rice': 50, 'Breece Hall': 51, 'D\'Andre Swift': 52,
-    'Zay Flowers': 53, 'Courtland Sutton': 54, 'Calvin Ridley': 55, 'DeVonta Smith': 56,
-    'Jaylen Waddle': 57, 'Jerry Jeudy': 58, 'Jameson Williams': 59, 'George Pickens': 60,
-    'Sam LaPorta': 61, 'Patrick Mahomes': 62, 'Baker Mayfield': 63, 'Rome Odunze': 64,
-    'Tetairoa McMillan': 65, 'Travis Hunter': 66, 'David Montgomery': 67, 'Aaron Jones Sr.': 68,
-    'T.J. Hockenson': 69, 'Tony Pollard': 70, 'RJ Harvey': 71, 'Isiah Pacheco': 72,
-    'Chris Godwin': 73, 'Jakobi Meyers': 74, 'Chris Olave': 75, 'Cooper Kupp': 76,
-    'Stefon Diggs': 77, 'Matthew Golden': 78, 'Jordan Addison': 79, 'Tyrone Tracy Jr.': 80,
-    'Jaylen Warren': 81, 'Kaleb Johnson': 82, 'Travis Kelce': 83, 'David Njoku': 84,
-    'Mark Andrews': 85, 'Evan Engram': 86, 'Bo Nix': 87, 'Kyler Murray': 88,
-    'Brock Purdy': 89, 'Joe Mixon': 90, 'Quinshon Judkins': 91, 'Brian Robinson Jr.': 92,
-    'J.K. Dobbins': 93, 'Rhamondre Stevenson': 94, 'Javonte Williams': 95, 'Khalil Shakir': 96,
-    'Jauan Jennings': 97, 'Deebo Samuel': 98, 'Ricky Pearsall': 99, 'Keon Coleman': 100
+    'Jaxon Smith-Njigba': 34, 'Terry McLaurin': 35, 'Garrett Wilson': 36, 'Omarion Hampton': 37,
+    'Kenneth Walker III': 38, 'Joe Burrow': 39, 'George Kittle': 40, 'Alvin Kamara': 41,
+    'Chuba Hubbard': 42, 'James Conner': 43, 'TreVeyon Henderson': 44, 'Mike Evans': 45,
+    'Marvin Harrison Jr.': 46, 'Xavier Worthy': 47, 'DK Metcalf': 48, 'D.J. Moore': 49,
+    'Rashee Rice': 50, 'Breece Hall': 51, 'D\'Andre Swift': 52, 'Zay Flowers': 53,
+    'Courtland Sutton': 54, 'Calvin Ridley': 55, 'DeVonta Smith': 56, 'Jaylen Waddle': 57,
+    'Jerry Jeudy': 58, 'Jameson Williams': 59, 'George Pickens': 60, 'Sam LaPorta': 61,
+    'Patrick Mahomes': 62, 'Baker Mayfield': 63, 'Rome Odunze': 64, 'Tetairoa McMillan': 65,
+    'Travis Hunter': 66, 'David Montgomery': 67, 'Aaron Jones Sr.': 68, 'T.J. Hockenson': 69,
+    'Tony Pollard': 70, 'RJ Harvey': 71, 'Isiah Pacheco': 72, 'Chris Godwin': 73,
+    'Jakobi Meyers': 74, 'Chris Olave': 75, 'Cooper Kupp': 76, 'Stefon Diggs': 77,
+    'Matthew Golden': 78, 'Jordan Addison': 79, 'Tyrone Tracy Jr.': 80, 'Jaylen Warren': 81,
+    'Kaleb Johnson': 82, 'Travis Kelce': 83, 'David Njoku': 84, 'Mark Andrews': 85,
+    'Evan Engram': 86, 'Bo Nix': 87, 'Kyler Murray': 88, 'Brock Purdy': 89, 'Joe Mixon': 90,
+    'Quinshon Judkins': 91, 'Brian Robinson Jr.': 92, 'J.K. Dobbins': 93, 'Rhamondre Stevenson': 94,
+    'Javonte Williams': 95, 'Khalil Shakir': 96, 'Jauan Jennings': 97, 'Deebo Samuel': 98, 'Ricky Pearsall': 99, 'Keon Coleman': 100
 }
-ESPN_RANKINGS['Aaron Jones'] = 68  # convenience alias
+ESPN_RANKINGS['Aaron Jones'] = 68
 
 ESPN_INSIGHTS = {
     'Ja\'Marr Chase': "Elite WR1 who dominated 2024 with league-leading metrics across targets, yards, and touchdowns.",
@@ -119,9 +116,8 @@ ESPN_INSIGHTS = {
     'Amon-Ra St. Brown': "105+ receptions three straight years; alpha slot.",
 }
 
-# FULL PLAYER NAME MAPPING (expanded with period variants)
 PLAYER_NAME_MAPPING = {
-    # Without periods (original)
+    # Unpunctuated
     'C McCaffrey': 'Christian McCaffrey', 'C Lamb': 'CeeDee Lamb', 'J Chase': 'Ja\'Marr Chase',
     'J Jefferson': 'Justin Jefferson', 'AJ Brown': 'A.J. Brown', 'B Robinson': 'Bijan Robinson',
     'S Barkley': 'Saquon Barkley', 'D Henry': 'Derrick Henry', 'J Gibbs': 'Jahmyr Gibbs',
@@ -133,7 +129,7 @@ PLAYER_NAME_MAPPING = {
     'M Evans': 'Mike Evans', 'J Smith-Njigba': 'Jaxon Smith-Njigba', 'D Adams': 'Davante Adams',
     'J Jacobs': 'Josh Jacobs', 'T McLaurin': 'Terry McLaurin', 'M Harrison Jr': 'Marvin Harrison Jr.',
     'DJ Moore': 'D.J. Moore', 'B Bowers': 'Brock Bowers',
-    # WITH periods (Supabase)
+    # With periods (Supabase-like)
     'J. Chase': 'Ja\'Marr Chase', 'J. Jefferson': 'Justin Jefferson', 'J. Gibbs': 'Jahmyr Gibbs',
     'C. McCaffrey': 'Christian McCaffrey', 'C. Lamb': 'CeeDee Lamb', 'S. Barkley': 'Saquon Barkley',
     'D. Henry': 'Derrick Henry', 'D. Achane': 'De\'Von Achane', 'J. Allen': 'Josh Allen',
@@ -162,7 +158,6 @@ PLAYER_NAME_MAPPING = {
     'J. Jennings': 'Jauan Jennings', 'J Jennings': 'Jauan Jennings'
 }
 
-# KEYWORD PHRASE ROTATION
 KEYWORD_VARIATIONS = [
     "vegas backed fantasy football rankings",
     "market-based fantasy rankings",
@@ -171,7 +166,6 @@ KEYWORD_VARIATIONS = [
     "Vegas-derived player projections"
 ]
 
-# INTRO STYLES
 INTRO_STYLES = {
     "standard": "Welcome to market-based fantasy analysis—rankings anchored to sportsbook player props rather than static projections. We translate Vegas lines into fantasy expectations so you can draft with data, not guesswork.",
     "direct": "The betting market prices {name} differently than ESPN. Here's why our sportsbook-derived analysis reveals edges traditional rankings miss.",
@@ -200,6 +194,7 @@ FAQ_POOLS = {
     ]
 }
 
+# ---------- Core ----------
 class ProductionBlogGenerator:
     def __init__(self):
         self.supabase_headers = {
@@ -218,7 +213,6 @@ class ProductionBlogGenerator:
         if HAS_SUPABASE:
             self.init_supabase_state()
 
-        # Reset option
         if os.getenv("RESET_STATE") == "1":
             print("🔄 RESET_STATE=1 detected - clearing all state files")
             for path in [POSTED_PATH, HASHES_PATH, ANCHORS_PATH, POSTED_RANKS_PATH]:
@@ -226,18 +220,19 @@ class ProductionBlogGenerator:
                     os.remove(path)
                     print(f"🗑️ Deleted {path}")
 
-        # Load persisted state
         self.content_hashes = self.load_content_hashes_from_supabase()
         self.posted_players = self.load_posted_players_from_supabase()
         self.used_anchors = self.load_used_anchors_from_supabase()
-        self.posted_ranks = self.load_posted_ranks_from_supabase()  # NEW
+        self.posted_ranks = self.load_posted_ranks_from_supabase()
 
-    # ----------------- Canonicalization -----------------
+        # 🔧 One-time backfill to align ranks with historical posts
+        self.seed_posted_ranks_from_history()
+
+    # ----- Canonicalization -----
     def _canon(self, s: str) -> str:
         if not s:
             return ""
-        s = s.strip()
-        return self._canonical_player(PLAYER_NAME_MAPPING.get(s, s))
+        return self._canonical_player(PLAYER_NAME_MAPPING.get(s.strip(), s.strip()))
 
     def _canonical_player(self, raw):
         name = (raw or "").strip()
@@ -253,22 +248,19 @@ class ProductionBlogGenerator:
         }
         return canonical_map.get(name, name)
 
-    # ----------------- Supabase / State Init -----------------
+    # ----- Supabase / State init -----
     def init_supabase_state(self):
         try:
             print("📊 Supabase state tables assumed present")
         except Exception as e:
             print(f"⚠️ Could not initialize Supabase tables: {e}")
 
-    # ----------------- Content Hashes -----------------
+    # ----- Content hashes -----
     def load_content_hashes_from_supabase(self):
         try:
-            response = self._get(
-                f'{SUPABASE_URL}/rest/v1/state_data?key=eq.content_hashes',
-                self.supabase_headers
-            )
-            if response.status_code == 200:
-                data = response.json()
+            r = self._get(f'{SUPABASE_URL}/rest/v1/state_data?key=eq.content_hashes', self.supabase_headers)
+            if r.status_code == 200:
+                data = r.json()
                 if data:
                     return set(data[0]['data'])
         except Exception as e:
@@ -291,14 +283,13 @@ class ProductionBlogGenerator:
                 'data': list(self.content_hashes),
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }
-            response = requests.post(
+            r = requests.post(
                 f'{SUPABASE_URL}/rest/v1/state_data?on_conflict=key',
                 headers={**self.supabase_headers, 'Prefer': 'resolution=merge-duplicates'},
-                json=payload,
-                timeout=30
+                json=payload, timeout=30
             )
-            if response.status_code not in [200, 201]:
-                print(f"⚠️ Failed to save content hashes: {response.status_code}")
+            if r.status_code not in (200, 201):
+                print(f"⚠️ Failed to save content hashes: {r.status_code}")
                 self.save_content_hashes_to_file()
         except Exception as e:
             print(f"⚠️ Error saving content hashes: {e}")
@@ -311,17 +302,13 @@ class ProductionBlogGenerator:
         except Exception as e:
             print(f"⚠️ Could not save content hashes to file: {e}")
 
-    # ----------------- Posted Players (legacy by name; kept for compatibility) -----------------
+    # ----- Posted players (legacy name-based) -----
     def load_posted_players_from_supabase(self):
         try:
-            response = self._get(
-                f'{SUPABASE_URL}/rest/v1/posted_articles?select=player_name',
-                self.supabase_headers
-            )
-            if response.status_code == 200:
-                data = response.json()
-                posted = [self._canon(item['player_name']) for item in data]
-                return posted
+            r = self._get(f'{SUPABASE_URL}/rest/v1/posted_articles?select=player_name', self.supabase_headers)
+            if r.status_code == 200:
+                data = r.json()
+                return [self._canon(d['player_name']) for d in data]
         except Exception as e:
             print(f"⚠️ Could not load posted players from Supabase: {e}")
         return self.load_posted_players_from_file()
@@ -330,8 +317,7 @@ class ProductionBlogGenerator:
         if os.path.exists(POSTED_PATH):
             try:
                 with open(POSTED_PATH, 'r') as f:
-                    data = json.load(f)
-                    data = [self._canon(x) for x in data]
+                    data = [self._canon(x) for x in json.load(f)]
                     print(f"📁 Loaded {len(data)} posted players from file")
                     return data
             except Exception:
@@ -353,40 +339,33 @@ class ProductionBlogGenerator:
         try:
             c = self._canon(player_name)
             payload = {
-                'player_name': c,
-                'slug': slug,
-                'content_hash': content_hash,
+                'player_name': c, 'slug': slug, 'content_hash': content_hash,
                 'created_at': datetime.now(timezone.utc).isoformat()
             }
-            response = requests.post(
+            r = requests.post(
                 f'{SUPABASE_URL}/rest/v1/posted_articles?on_conflict=player_name',
                 headers={**self.supabase_headers, 'Prefer': 'resolution=merge-duplicates'},
-                json=payload,
-                timeout=30
+                json=payload, timeout=30
             )
-            if response.status_code in [200, 201]:
-                print(f"📊 Saved {c} to posted_articles table")
+            if r.status_code in (200, 201):
+                print(f"📊 Saved {c} to posted_articles")
                 if c not in self.posted_players:
                     self.posted_players.append(c)
                 return True
-            else:
-                print(f"⚠️ Failed to save posted player: {response.status_code}")
-                self.save_posted_player_to_file(c)
-                return False
+            print(f"⚠️ Failed to save posted player: {r.status_code}")
+            self.save_posted_player_to_file(c)
+            return False
         except Exception as e:
             print(f"⚠️ Error saving posted player: {e}")
             self.save_posted_player_to_file(self._canon(player_name))
             return False
 
-    # ----------------- Used Anchors -----------------
+    # ----- Used anchors -----
     def load_used_anchors_from_supabase(self):
         try:
-            response = self._get(
-                f'{SUPABASE_URL}/rest/v1/state_data?key=eq.used_anchors',
-                self.supabase_headers
-            )
-            if response.status_code == 200:
-                data = response.json()
+            r = self._get(f'{SUPABASE_URL}/rest/v1/state_data?key=eq.used_anchors', self.supabase_headers)
+            if r.status_code == 200:
+                data = r.json()
                 if data:
                     return data[0]['data']
         except Exception as e:
@@ -404,19 +383,14 @@ class ProductionBlogGenerator:
 
     def save_used_anchors_to_supabase(self):
         try:
-            payload = {
-                'key': 'used_anchors',
-                'data': self.used_anchors,
-                'updated_at': datetime.now(timezone.utc).isoformat()
-            }
-            response = requests.post(
+            payload = {'key': 'used_anchors', 'data': self.used_anchors, 'updated_at': datetime.now(timezone.utc).isoformat()}
+            r = requests.post(
                 f'{SUPABASE_URL}/rest/v1/state_data?on_conflict=key',
                 headers={**self.supabase_headers, 'Prefer': 'resolution=merge-duplicates'},
-                json=payload,
-                timeout=30
+                json=payload, timeout=30
             )
-            if response.status_code not in [200, 201]:
-                print(f"⚠️ Failed to save used anchors: {response.status_code}")
+            if r.status_code not in (200, 201):
+                print(f"⚠️ Failed to save used anchors: {r.status_code}")
                 self.save_used_anchors_to_file()
         except Exception as e:
             print(f"⚠️ Error saving used anchors: {e}")
@@ -429,14 +403,7 @@ class ProductionBlogGenerator:
         except Exception as e:
             print(f"⚠️ Could not save used anchors to file: {e}")
 
-    def _get_anchor_seen(self, key):
-        raw = self.used_anchors.get(key, [])
-        return set(raw if isinstance(raw, list) else [])
-
-    def _put_anchor_seen(self, key, seen_set):
-        self.used_anchors[key] = sorted(list(seen_set))
-
-    # ----------------- NEW: Posted Ranks -----------------
+    # ----- NEW: posted_ranks (true dedupe) -----
     def load_posted_ranks_from_supabase(self):
         if not HAS_SUPABASE:
             return self.load_posted_ranks_from_file()
@@ -470,8 +437,7 @@ class ProductionBlogGenerator:
             r = requests.post(
                 f'{SUPABASE_URL}/rest/v1/state_data?on_conflict=key',
                 headers={**self.supabase_headers, 'Prefer': 'resolution=merge-duplicates'},
-                json=payload,
-                timeout=30
+                json=payload, timeout=30
             )
             if r.status_code not in (200, 201):
                 print(f"⚠️ Failed to save posted_ranks to Supabase: {r.status_code}")
@@ -487,7 +453,49 @@ class ProductionBlogGenerator:
         except Exception as e:
             print(f"⚠️ Could not save posted_ranks to file: {e}")
 
-    # ----------------- HTTP helpers -----------------
+    # ----- One-time backfill from history -----
+    def seed_posted_ranks_from_history(self):
+        """
+        Read previously posted names (posted_players), map to current players' ranks, and add
+        those ranks into posted_ranks. Idempotent.
+        """
+        try:
+            # Heuristic: if posted_ranks already covers at least half of known posted names, skip
+            if len(self.posted_players) == 0 or len(self.posted_ranks) >= max(1, len(self.posted_players) // 2):
+                return
+
+            r = requests.get(
+                f'{SUPABASE_URL}/rest/v1/players?select=name,overall_rank&position=not.in.(D/ST,K)&limit=10000',
+                headers=self.supabase_headers, timeout=30
+            )
+            if r.status_code != 200:
+                print(f"⚠️ seed_posted_ranks_from_history: failed to fetch players: {r.status_code}")
+                return
+            players = r.json()
+            by_canon = {}
+            for p in players:
+                nm = self._canon(p.get('name', ''))
+                try:
+                    rk = int(p.get('overall_rank', 0))
+                except:
+                    rk = None
+                if nm and rk:
+                    by_canon[nm] = rk
+
+            added = 0
+            for nm in set(self.posted_players):
+                rk = by_canon.get(nm)
+                if rk and rk not in self.posted_ranks:
+                    self.posted_ranks.add(rk)
+                    added += 1
+
+            if added:
+                print(f"🧩 Seeded {added} ranks into posted_ranks from history")
+                self.save_posted_ranks_to_supabase()
+        except Exception as e:
+            print(f"⚠️ seed_posted_ranks_from_history error: {e}")
+
+    # ----- HTTP helpers -----
     def _get(self, url, headers, tries=3):
         for i in range(tries):
             try:
@@ -495,8 +503,7 @@ class ProductionBlogGenerator:
                 if r.status_code == 200:
                     return r
                 if r.status_code in (429, 500, 502, 503, 504):
-                    sleep_s = (2**i) * 2 + random.uniform(0, 1.5)
-                    time.sleep(sleep_s)
+                    time.sleep((2**i) * 2 + random.uniform(0, 1.5))
                     continue
                 return r
             except Exception:
@@ -512,8 +519,7 @@ class ProductionBlogGenerator:
                 if r.status_code in (200, 201, 202):
                     return r
                 if r.status_code in (429, 500, 502, 503, 504):
-                    sleep_s = (2**i) * 2 + random.uniform(0, 1.5)
-                    time.sleep(sleep_s)
+                    time.sleep((2**i) * 2 + random.uniform(0, 1.5))
                     continue
                 return r
             except Exception:
@@ -551,7 +557,7 @@ class ProductionBlogGenerator:
             pass
         return None
 
-    # ----------------- Webflow schema helpers -----------------
+    # ----- Webflow schema helpers -----
     def _safe_jsonld(self, payload, max_len=90000):
         s = json.dumps(payload, separators=(',', ':'))
         if len(s) > max_len:
@@ -589,7 +595,6 @@ class ProductionBlogGenerator:
     def _webflow_allowed_fields(self):
         if hasattr(self, "_wf_fields_cache"):
             return self._wf_fields_cache
-
         fallback = {
             "name", "slug",
             "post-body", "player-name",
@@ -601,12 +606,8 @@ class ProductionBlogGenerator:
             "status", "post-summary", "featured", "url",
             "main-image",
         }
-
         try:
-            r = self._get(
-                f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}',
-                self.webflow_headers
-            )
+            r = self._get(f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}', self.webflow_headers)
             r.raise_for_status()
             data = r.json()
             schema_slugs = {f.get("slug") for f in data.get("fields", []) if f.get("slug")}
@@ -614,7 +615,6 @@ class ProductionBlogGenerator:
             allowed = schema_slugs if schema_slugs else fallback
         except Exception:
             allowed = fallback
-
         self._wf_fields_cache = allowed
         return allowed
 
@@ -627,15 +627,15 @@ class ProductionBlogGenerator:
             print(f"ℹ️ Allowed slugs sample: {sorted(list(allowed))[:25]} ... (total {len(allowed)})")
         return filtered
 
-    # ----------------- Content generation -----------------
+    # ----- Content generation -----
     def check_data_completeness(self, player_data):
-        required_keys = ["rushing_yards_line", "receiving_yards_line", "rushing_touchdowns_line",
-                         "receiving_touchdowns_line", "fantasy_score"]
-        na_count = sum(1 for k in required_keys if self._is_missing(player_data.get(k)))
-        completeness_score = 5 - na_count
-        if na_count >= 3:
-            return False, f"Insufficient market data ({na_count}/5 missing)", completeness_score
-        return True, "Data complete", completeness_score
+        required = ["rushing_yards_line", "receiving_yards_line", "rushing_touchdowns_line",
+                    "receiving_touchdowns_line", "fantasy_score"]
+        na = sum(1 for k in required if self._is_missing(player_data.get(k)))
+        score = 5 - na
+        if na >= 3:
+            return False, f"Insufficient market data ({na}/5 missing)", score
+        return True, "Data complete", score
 
     def ensure_unique_slug(self, base_slug):
         slug = base_slug
@@ -652,28 +652,23 @@ class ProductionBlogGenerator:
                 self.webflow_headers
             )
             if r.status_code == 200:
-                items = r.json().get('items', [])
-                return len(items) > 0
+                return len(r.json().get('items', [])) > 0
         except Exception:
             pass
         return False
 
-    def generate_safe_espn_link(self, team):
-        return ""
-
     def comparable_delta_enhanced(self, base_player, comp_player):
         deltas = []
-        comparison_fields = [
+        for field, label in [
             ('rushing_touchdowns_line', 'TD line'),
             ('receiving_yards_line', 'Rec yards'),
             ('playoff_sos_score', 'Playoff SOS'),
             ('fantasy_score', 'Proj points')
-        ]
-        for field, label in comparison_fields:
-            base_val = self._to_float(base_player.get(field))
-            comp_val = self._to_float(comp_player.get(field))
-            if base_val is not None and comp_val is not None:
-                diff = base_val - comp_val
+        ]:
+            bv = self._to_float(base_player.get(field))
+            cv = self._to_float(comp_player.get(field))
+            if bv is not None and cv is not None:
+                diff = bv - cv
                 sign = '+' if diff >= 0 else ''
                 deltas.append(f"{label} {sign}{round(diff, 1)}")
         return ', '.join(deltas) if deltas else 'similar profile'
@@ -684,27 +679,24 @@ class ProductionBlogGenerator:
         normalized = re.sub(r'&nbsp;', ' ', normalized)
         normalized = re.sub(r'[\u2018\u2019]', "'", normalized)
         for phrase in KEYWORD_VARIATIONS:
-            pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-            normalized = pattern.sub("market-based rankings", normalized)
-        insertion_block = (
+            normalized = re.sub(re.escape(phrase), "market-based rankings", normalized, flags=re.IGNORECASE)
+        block = (
             '<h2>Market vs. Media Rankings</h2>\n'
             f'<p>Our <a href="https://thebettinginsider.com/fantasy-football">{PRIMARY}</a> '
             'provide superior draft guidance.</p>'
         )
-        h2_tag = '<h2>Market vs. Media Rankings</h2>'
-        if h2_tag in normalized:
-            return normalized.replace(h2_tag, insertion_block, 1)
+        if '<h2>Market vs. Media Rankings</h2>' in normalized:
+            return normalized.replace('<h2>Market vs. Media Rankings</h2>', block, 1)
         if '</p>' in normalized:
-            return normalized.replace('</p>', '</p>\n' + insertion_block, 1)
-        return insertion_block + "\n" + normalized
+            return normalized.replace('</p>', '</p>\n' + block, 1)
+        return block + "\n" + normalized
 
     def _nearby_comparables_plain(self, me, all_players):
         me_rank = self._to_float(me.get('overall_rank')) or 999
-        me_name = PLAYER_NAME_MAPPING.get(me.get('name','Unknown'), me.get('name','Unknown'))
         pos = me.get('position','Unknown')
         comps = []
         for p in all_players:
-            if p.get('name') == me.get('name'):
+            if p.get('name') == me.get('name'): 
                 continue
             if p.get('position') != pos:
                 continue
@@ -728,11 +720,10 @@ class ProductionBlogGenerator:
         primary_a = f"Based on Vegas-derived projections, {full_name} provides {'elite' if player_data.get('overall_rank', 999) <= 12 else 'strong' if player_data.get('overall_rank', 999) <= 24 else 'solid'} value at #{player_data.get('overall_rank', 'N/A')} overall with {player_data.get('fantasy_score', 'N/A')} projected points."
         faqs.append((primary_q, primary_a))
         secondary_q = random.choice(FAQ_POOLS['secondary'])
-        secondary_answers = [
+        secondary_a = random.choice([
             "Sportsbook lines react to injuries, depth charts, and news in real-time, creating actionable edges that static preseason projections miss.",
             "Market efficiency in pricing player outcomes makes Vegas-derived projections more responsive to changing conditions than expert consensus rankings."
-        ]
-        secondary_a = random.choice(secondary_answers)
+        ])
         faqs.append((secondary_q, secondary_a))
         if random.random() > 0.5:
             contextual_q = random.choice(FAQ_POOLS['contextual']).format(name=full_name)
@@ -741,7 +732,7 @@ class ProductionBlogGenerator:
         return faqs
 
     def generate_webflow_optimized_content(self, player_data, espn_data=None, all_players_data=None):
-        data_ok, data_msg, completeness_score = self.check_data_completeness(player_data)
+        data_ok, _, completeness_score = self.check_data_completeness(player_data)
         full_name = self._canonical_player(PLAYER_NAME_MAPPING.get(player_data.get('name', 'Unknown'), player_data.get('name', 'Unknown')))
         base_slug = full_name.lower().replace(' ', '-').replace('.', '').replace('\'', '')
         unique_slug = self.ensure_unique_slug(base_slug)
@@ -803,13 +794,13 @@ class ProductionBlogGenerator:
 <p>Draft positioning for {full_name}: {'Picks 1-12 in 12-team formats' if overall_rank <= 12 else 'Picks 13-24 in 12-team formats' if overall_rank <= 24 else 'Round 3+ value territory'}.</p>
 <p>Build considerations: {'Pair with high-target WR1 to balance TD variance' if position == 'RB' and overall_rank <= 12 else 'Build around as foundational WR1' if position == 'WR' and overall_rank <= 12 else 'Excellent depth with upside potential'}.</p>'''
         }
-        for section in sections:
-            post_body += "\n" + section_content[section] + "\n"
+        for s in sections:
+            post_body += "\n" + section_content[s] + "\n"
 
-        comparables_html = ""
         if all_players_data:
-            comparables_html = self._nearby_comparables_plain(player_data, all_players_data)
-            post_body += ("\n" + comparables_html) if comparables_html else ""
+            comps_html = self._nearby_comparables_plain(player_data, all_players_data)
+            if comps_html:
+                post_body += "\n" + comps_html
 
         takeaways = [
             f"{full_name} market rank: #{overall_rank}{' vs ESPN #' + str(espn_rank) if espn_rank else ''}",
@@ -875,7 +866,10 @@ class ProductionBlogGenerator:
         post_body = self.guarantee_primary_keyword(post_body, keyword_index)
 
         title = self.word_safe_clamp(f"{full_name} Fantasy Outlook 2025 (Vegas vs ESPN, #{overall_rank})", 60)
-        meta = self.word_safe_clamp(f"{full_name} market rank #{overall_rank} vs ESPN #{espn_rank or '—'}. TD line {td_line or 'N/A'}, playoff SOS {player_data.get('playoff_sos_score', 'N/A')}. Full breakdown, projections.", 160)
+        meta = self.word_safe_clamp(
+            f"{full_name} market rank #{overall_rank} vs ESPN #{espn_rank or '—'}. TD line {td_line or 'N/A'}, playoff SOS {player_data.get('playoff_sos_score', 'N/A')}. Full breakdown, projections.",
+            160
+        )
 
         clean_content = re.sub(r'<[^>]+>', '', post_body)
         content_hash = hashlib.sha1(clean_content.encode()).hexdigest()
@@ -890,11 +884,8 @@ class ProductionBlogGenerator:
             self.save_posted_player_to_supabase(self._canon(full_name), unique_slug, content_hash)
             return None
 
-        featured_image = (player_data.get('player_headshot_url') or "").strip()
-        if not featured_image:
-            featured_image = 'https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png'
-        main_img_url = featured_image
-        summary = self.word_safe_clamp(clean_content.strip(), 220)
+        featured_image = (player_data.get('player_headshot_url') or "").strip() or \
+                         'https://cdn.prod.website-files.com/670bfa1fd9c3c20a149fa6a7/688d2acad067d5e2eb678698_footballblog.png'
 
         fieldData_raw = {
             "name": title,
@@ -917,11 +908,11 @@ class ProductionBlogGenerator:
             "td-line": td_line,
             "playoff-sos": player_data.get('playoff_sos_score'),
 
-            "main-image": self._as_webflow_image(main_img_url, alt=f"{full_name} fantasy article image"),
+            "main-image": self._as_webflow_image(featured_image, alt=f"{full_name} fantasy article image"),
             "featured-image": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
             "headshot-url": self._as_webflow_image(featured_image, alt=f"{full_name} headshot"),
 
-            "post-summary": summary,
+            "post-summary": self.word_safe_clamp(clean_content.strip(), 220),
             "featured": False,
             "url": f"https://thebettinginsider.com/{COLLECTION_PATH}/{unique_slug}",
             "status": "published" if data_ok else "thin_content_gate",
@@ -952,28 +943,22 @@ class ProductionBlogGenerator:
             "datePublished": datetime.now(timezone.utc).isoformat(),
             "dateModified": datetime.now(timezone.utc).isoformat(),
             "author": {"@type": "Person", "name": "Jake Turner"},
-            "publisher": {
-                "@type": "Organization",
-                "name": "The Betting Insider",
-                "logo": {"@type": "ImageObject", "url": "https://thebettinginsider.com/logo.png"}
-            },
+            "publisher": {"@type": "Organization", "name": "The Betting Insider",
+                          "logo": {"@type": "ImageObject", "url": "https://thebettinginsider.com/logo.png"}},
             "image": {"@type": "ImageObject", "url": featured_image, "width": 400, "height": 400},
             "articleSection": "Fantasy Football",
             "keywords": [f"{full_name} fantasy 2025", f"{player_data.get('position', 'NFL')} rankings"],
             "mainEntityOfPage": {"@type": "WebPage", "@id": f"https://thebettinginsider.com/{COLLECTION_PATH}/{slug}"}
         }
-        faq_entities = []
-        for q, a in faqs:
-            faq_entities.append({"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}})
+        faq_entities = [{"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in faqs]
         faq_schema = {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": faq_entities}
         return sports_article, faq_schema
 
-    # ----------------- Webflow Posting -----------------
+    # ----- Webflow posting -----
     def post_to_webflow_enhanced(self, blog_data, delay_minutes=None):
         if delay_minutes and os.getenv("NO_DELAY") != "1":
-            delay_seconds = delay_minutes * 60
             print(f"⏳ Waiting {delay_minutes} minutes before posting...", flush=True)
-            time.sleep(delay_seconds)
+            time.sleep(delay_minutes * 60)
 
         filtered_data = self._filter_to_allowed(blog_data['fieldData_raw'])
 
@@ -996,11 +981,9 @@ class ProductionBlogGenerator:
         try:
             response = self._post_with_backoff(
                 f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items',
-                self.webflow_headers,
-                post_data,
-                tries=3
+                self.webflow_headers, post_data, tries=3
             )
-            if response.status_code in [200, 201, 202]:
+            if response.status_code in (200, 201, 202):
                 print(f"✅ Posted {blog_data['full_name']} to Webflow (Status: {response.status_code}) - {blog_data['word_count']} words")
                 try:
                     coll_response = self._get(f"https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}", self.webflow_headers)
@@ -1014,17 +997,12 @@ class ProductionBlogGenerator:
                 self.content_hashes.add(blog_data['content_hash'])
                 self.save_content_hashes_to_supabase()
 
-                self.save_posted_player_to_supabase(
-                    self._canon(blog_data['full_name']),
-                    blog_data['unique_slug'],
-                    blog_data['content_hash']
-                )
+                self.save_posted_player_to_supabase(self._canon(blog_data['full_name']), blog_data['unique_slug'], blog_data['content_hash'])
                 self.save_used_anchors_to_supabase()
                 return True
-            else:
-                print(f"❌ Failed to post {blog_data['full_name']}: {response.status_code}")
-                print(f"Response: {response.text}")
-                return False
+            print(f"❌ Failed to post {blog_data['full_name']}: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
         except Exception as e:
             print(f"❌ Error posting {blog_data['full_name']}: {e}")
             return False
@@ -1044,10 +1022,7 @@ class ProductionBlogGenerator:
         try:
             domain_ids = []
             if publish_custom:
-                r = self._get(
-                    f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/custom_domains',
-                    self.webflow_headers
-                )
+                r = self._get(f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/custom_domains', self.webflow_headers)
                 if r and r.status_code == 200:
                     data = r.json()
                     domain_ids = [d["id"] for d in data.get("customDomains", []) if d.get("id")]
@@ -1061,12 +1036,7 @@ class ProductionBlogGenerator:
 
             print("DEBUG publish payload:", payload, flush=True)
 
-            resp = self._post_with_backoff(
-                f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish',
-                self.webflow_headers,
-                payload,
-                tries=3
-            )
+            resp = self._post_with_backoff(f'https://api.webflow.com/v2/sites/{WEBFLOW_SITE_ID}/publish', self.webflow_headers, payload, tries=3)
             if resp and resp.status_code in (200, 202):
                 print("✅ Webflow site publish queued")
                 self.ping_search_engines()
@@ -1078,177 +1048,172 @@ class ProductionBlogGenerator:
             print(f"❌ Error publishing site: {e}")
             return False
 
-    # ----------------- MAIN DAILY LOOP (true dedupe by rank) -----------------
+    # ----- Main loop -----
     def run_daily_posting(self, posts_per_day=9):
         print(f"🚀 Starting DAILY production posting - {posts_per_day} new blogs")
         print(f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         print(f"📁 State persistence: {'Supabase + file fallback' if HAS_SUPABASE else 'file-only'} in {STATE_DIR}")
         if HAS_SUPABASE:
-            print("✅ Supabase state persistence - truly set-and-forget daily posting")
+            print("✅ Supabase state persistence")
         else:
-            print("✅ File-based state persistence - truly set-and-forget daily posting")
+            print("✅ File-based state persistence")
 
-        # Verify Supabase connection (required to fetch players)
         if HAS_SUPABASE:
             print("🔍 Testing Supabase connection...")
             try:
-                test_response = requests.get(
-                    f'{SUPABASE_URL}/rest/v1/players?limit=1',
-                    headers=self.supabase_headers,
-                    timeout=10
-                )
-                print(f"🔍 Supabase test response: {test_response.status_code}")
-                if test_response.status_code != 200:
-                    print(f"❌ Supabase connection failed: {test_response.text}")
+                test = requests.get(f'{SUPABASE_URL}/rest/v1/players?limit=1', headers=self.supabase_headers, timeout=10)
+                print(f"🔍 Supabase test response: {test.status_code}")
+                if test.status_code != 200:
+                    print(f"❌ Supabase connection failed: {test.text}")
                     return
                 print("✅ Supabase connection successful")
             except Exception as e:
                 print(f"❌ Supabase connection error: {e}")
                 return
         else:
-            print("❌ Supabase credentials are required to fetch player data (players & betting).")
-            print("   Set SUPABASE_URL and SUPABASE_ANON_KEY environment variables.")
+            print("❌ Supabase credentials are required to fetch player data.")
             return
 
-        # Fetch all players
         print("📊 Fetching all players...")
         try:
-            response = requests.get(
+            r = requests.get(
                 f'{SUPABASE_URL}/rest/v1/players?position=not.in.(D/ST,K)&order=overall_rank.asc&limit=175',
-                headers=self.supabase_headers,
-                timeout=30
+                headers=self.supabase_headers, timeout=30
             )
-            print(f"📊 Player fetch response: {response.status_code}")
-            if response.status_code != 200:
-                print(f"❌ Failed to fetch players: {response.status_code}")
-                print(f"❌ Response text: {response.text}")
+            print(f"📊 Player fetch response: {r.status_code}")
+            if r.status_code != 200:
+                print(f"❌ Failed to fetch players: {r.status_code}")
+                print(f"❌ Response text: {r.text}")
                 return
-            all_players = response.json()
+            all_players = r.json()
             print(f"📊 Found {len(all_players)} total players")
         except Exception as e:
             print(f"❌ Error fetching players: {e}")
             return
 
-        # Build exclusion set: posted ranks + optional permanent exclusions
-        exclude_set = set(self.posted_ranks)
+        # Build exclusion set
+        exclude = set(self.posted_ranks)
         if EXCLUDE_TOP_N > 0:
-            exclude_set |= set(range(1, EXCLUDE_TOP_N + 1))
+            exclude |= set(range(1, EXCLUDE_TOP_N + 1))
         if EXCLUDE_RANKS_EXTRA:
-            exclude_set |= EXCLUDE_RANKS_EXTRA
+            exclude |= EXCLUDE_RANKS_EXTRA
 
-        # Compute unposted
         def _safe_rank(p):
-            try:
-                return int(p.get('overall_rank', 999))
-            except Exception:
-                return 999
+            try: return int(p.get('overall_rank', 999))
+            except: return 999
 
-        unposted_players = [p for p in all_players if _safe_rank(p) not in exclude_set]
-        unposted_players = sorted(unposted_players, key=lambda x: _safe_rank(x))
+        unposted = [p for p in all_players if _safe_rank(p) not in exclude]
+        unposted = sorted(unposted, key=lambda x: _safe_rank(x))
 
-        print(f"📊 Excluding {len(exclude_set)} ranks; sample: {sorted(list(exclude_set))[:20]}")
-        print(f"📊 Next up ranks: {[ _safe_rank(p) for p in unposted_players[:10] ]}")
+        print(f"📊 Excluding {len(exclude)} ranks; sample: {sorted(list(exclude))[:20]}")
+        print(f"📊 Next up ranks: {[ _safe_rank(p) for p in unposted[:10] ]}")
 
-        daily_batch = unposted_players[:posts_per_day]
+        daily_batch = unposted[:posts_per_day]
         print(f"📝 Today's batch: {len(daily_batch)} new players")
-        print(f"📊 Already posted by rank: {len(self.posted_ranks)}")
-        print(f"🔄 Remaining after today: {len(unposted_players) - len(daily_batch)}")
+        print(f"🏷️ Already posted by rank: {len(self.posted_ranks)}")
+        print(f"🔄 Remaining after today: {len(unposted) - len(daily_batch)}")
 
         if not daily_batch:
             print("🎉 All available players have been posted (given current exclusions)!")
             return
 
-        successful_posts = 0
-        failed_posts = []
+        successful = 0
+        failed = []
         data_skipped = 0
 
         for i, player in enumerate(daily_batch):
             player_name = player['name']
-            player_rank = _safe_rank(player)
+            try:
+                player_rank = int(player.get('overall_rank', 999))
+            except:
+                player_rank = 999
+
             print(f"\n📝 Processing {i+1}/{len(daily_batch)}: #{player_rank} {player_name}")
 
             try:
-                detailed_data = self.fetch_detailed_player_data(player_name)
-                if not detailed_data:
-                    failed_posts.append(f"#{player_rank} {player_name} (fetch failed)")
+                detailed = self.fetch_detailed_player_data(player_name)
+                if not detailed:
+                    failed.append(f"#{player_rank} {player_name} (fetch failed)")
                     continue
 
                 blog_data = self.generate_webflow_optimized_content(
-                    detailed_data['player'],
-                    detailed_data.get('espn'),
-                    all_players
+                    detailed['player'], detailed.get('espn'), all_players
                 )
-
                 if not blog_data:
-                    failed_posts.append(f"#{player_rank} {player_name} (duplicate content)")
+                    failed.append(f"#{player_rank} {player_name} (duplicate content)")
+                    continue
+
+                # ⛔ HARD NO-DUP GUARD: if slug already exists, mark rank posted and skip
+                slug_to_check = blog_data['fieldData_raw'].get('slug')
+                if slug_to_check and self.slug_exists(slug_to_check):
+                    print(f"⛔ Already exists in Webflow: {slug_to_check} — marking rank as posted and skipping")
+                    self.posted_ranks.add(player_rank)
+                    self.save_posted_ranks_to_supabase()
+                    canon = self._canon(player_name)
+                    if canon not in self.posted_players:
+                        self.posted_players.append(canon)
+                    # continue to next player
                     continue
 
                 if not blog_data['should_index']:
                     data_skipped += 1
                     print(f"⚠️ Data completeness issue: Skipping #{player_rank} {player_name}")
+                    # still mark posted to avoid retry loops? No — keep it available for later if data improves.
                     continue
 
                 delay = random.randint(1, 4) if i > 0 else 0
                 if self.post_to_webflow_enhanced(blog_data, delay):
-                    successful_posts += 1
-
-                    # ✅ Mark by rank immediately to prevent re-picks if process dies
+                    successful += 1
+                    # mark by rank immediately (prevents re-pick if process dies later)
                     self.posted_ranks.add(player_rank)
                     self.save_posted_ranks_to_supabase()
 
-                    canonical_name = self._canon(player_name)
-                    if canonical_name not in self.posted_players:
-                        self.posted_players.append(canonical_name)
+                    canon = self._canon(player_name)
+                    if canon not in self.posted_players:
+                        self.posted_players.append(canon)
                     self.save_used_anchors_to_supabase()
                 else:
-                    failed_posts.append(f"#{player_rank} {player_name} (post failed)")
+                    failed.append(f"#{player_rank} {player_name} (post failed)")
 
             except Exception as e:
                 print(f"❌ Error processing #{player_rank} {player_name}: {e}")
-                failed_posts.append(f"#{player_rank} {player_name} (exception)")
+                failed.append(f"#{player_rank} {player_name} (exception)")
 
-        if successful_posts > 0:
+        if successful > 0:
             print(f"\n🚀 Publishing Webflow site...")
             self.publish_webflow_site()
 
         print(f"\n📊 DAILY posting summary:")
-        print(f"✅ Successful: {successful_posts}")
-        print(f"❌ Failed: {len(failed_posts)}")
+        print(f"✅ Successful: {successful}")
+        print(f"❌ Failed: {len(failed)}")
         print(f"⚠️ Data issues skipped: {data_skipped}")
         print(f"📝 Total posted ranks to date: {len(self.posted_ranks)}")
-        print(f"🔄 Remaining (est): {max(0, len(all_players) - len(self.posted_ranks) - len(EXCLUDE_RANKS_EXTRA) - EXCLUDE_TOP_N)}")
+        est_remaining = max(0, len(all_players) - len(self.posted_ranks) - len(EXCLUDE_RANKS_EXTRA) - EXCLUDE_TOP_N)
+        print(f"🔄 Remaining (est): {est_remaining}")
+        if failed:
+            print(f"❌ Failed items: {', '.join(failed)}")
+        print("\n🎯 Features: true rank dedupe • seeded history • slug guard • SEO • file fallbacks")
 
-        if failed_posts:
-            print(f"❌ Failed items: {', '.join(failed_posts)}")
-
-        print(f"\n🎯 Daily posting features:")
-        print(f"✅ True dedupe by rank (persisted in state_data → posted_ranks)")
-        print(f"✅ Optional exclusions: EXCLUDE_TOP_N, EXCLUDE_RANKS")
-        print(f"✅ Supabase state persistence (with file fallback)")
-        print(f"✅ Inline JSON-LD, hub links, better titles")
-        print(f"🚀 SHIP-READY")
-
-    # ----------------- Data fetch (players + betting + ESPN) -----------------
+    # ----- Data fetch -----
     def fetch_detailed_player_data(self, player_name):
         try:
-            player_response = requests.get(
-                f'{SUPABASE_URL}/rest/v1/players?name=ilike.%25{requests.utils.quote(player_name)}%25',
-                headers=self.supabase_headers,
-                timeout=30
+            # ilike %...% with safe encoding
+            qname = requests.utils.quote(player_name)
+            player_resp = requests.get(
+                f'{SUPABASE_URL}/rest/v1/players?name=ilike.%25{qname}%25',
+                headers=self.supabase_headers, timeout=30
             )
-            if player_response.status_code != 200 or not player_response.json():
+            if player_resp.status_code != 200 or not player_resp.json():
                 return None
-
-            player_info = player_response.json()[0]
+            player_info = player_resp.json()[0]
             player_id = player_info['id']
 
-            betting_response = requests.get(
+            betting_resp = requests.get(
                 f'{SUPABASE_URL}/rest/v1/player_betting_breakdown?player_id=eq.{player_id}',
-                headers=self.supabase_headers,
-                timeout=30
+                headers=self.supabase_headers, timeout=30
             )
-            betting_data = betting_response.json()[0] if betting_response.status_code == 200 and betting_response.json() else {}
-            combined_data = {**player_info, **betting_data}
+            betting = betting_resp.json()[0] if betting_resp.status_code == 200 and betting_resp.json() else {}
+            combined = {**player_info, **betting}
 
             full_name = self._canonical_player(PLAYER_NAME_MAPPING.get(player_name, player_name))
             espn_rank = ESPN_RANKINGS.get(full_name)
@@ -1257,31 +1222,29 @@ class ProductionBlogGenerator:
                 print(f"ℹ️ No ESPN rank found for: '{full_name}' (from '{player_name}')")
             espn_data = {'rank': espn_rank, 'insight': espn_insight} if espn_rank else None
 
-            return {'player': combined_data, 'espn': espn_data}
+            return {'player': combined, 'espn': espn_data}
         except Exception as e:
             print(f"❌ Error fetching data for {player_name}: {e}")
             return None
 
 
-# ----------------- CLI -----------------
+# ---------- CLI ----------
 if __name__ == "__main__":
     import argparse
 
     print("🔍 DEBUG: Starting main script...")
-
-    parser = argparse.ArgumentParser(description='DAILY production blog posting to Webflow with Supabase state (true dedupe by rank)')
+    parser = argparse.ArgumentParser(description='DAILY production blog posting to Webflow with Supabase state (true dedupe by rank + seeding + slug guard)')
     parser.add_argument('--posts', type=int, default=9, help='Posts per day (default: 9)')
     parser.add_argument('--test', action='store_true', help='Test mode')
-
     args = parser.parse_args()
     print(f"🔍 DEBUG: Args parsed: posts={args.posts}, test={args.test}")
 
-    print("🛡️ DAILY Production Blog Generator v3 - TRUE DEDUPE")
-    print("✅ Supabase state persistence (with file fallback)")
-    print("✅ True daily posting without duplication (by rank)")
-    print("✅ Optional EXCLUDE_TOP_N / EXCLUDE_RANKS controls")
-    print("✅ SEO: Inline JSON-LD, hub links, better titles")
-    print("🔐 Environment variables validated")
+    print("🛡️ DAILY Production Blog Generator v4")
+    print("✅ True dedupe by rank (persisted)")
+    print("✅ Backfill posted_ranks from history")
+    print("✅ Slug-exists guard before post")
+    print("✅ SEO + JSON-LD + hub links")
+    print("🔐 Env validated")
 
     print("🔍 DEBUG: Creating generator instance...")
     try:
@@ -1295,15 +1258,11 @@ if __name__ == "__main__":
         print("🧪 Test mode - validating setup")
         fields = generator._webflow_allowed_fields()
         print(f"📋 Available Webflow fields: {sorted(fields)}")
-        print(f"🔗 Anchor diversity tracker initialized: {generator.used_anchors}")
-        print(f"📊 Currently posted players (names): {len(generator.posted_players)}")
-        print(f"🏷️ Currently posted ranks: {len(generator.posted_ranks)} (sample: {sorted(list(generator.posted_ranks))[:20]})")
-        # ✅ Name canonicalization quick check
-        test_names = ["J. Chase", "J Chase", "Ja'Marr Chase"]
-        print(f"🧪 Name canonicalization test:")
-        for name in test_names:
-            canon = generator._canon(name)
-            print(f"  '{name}' → '{canon}'")
+        print(f"🔗 Anchor tracker initialized: {generator.used_anchors}")
+        print(f"📊 Posted players (names): {len(generator.posted_players)}")
+        print(f"🏷️ Posted ranks: {len(generator.posted_ranks)} (sample: {sorted(list(generator.posted_ranks))[:20]})")
+        for name in ["J. Chase", "J Chase", "Ja'Marr Chase"]:
+            print(f"  Canon: '{name}' → '{generator._canon(name)}'")
     else:
         print("🔍 DEBUG: Starting daily posting...")
         generator.run_daily_posting(args.posts)
