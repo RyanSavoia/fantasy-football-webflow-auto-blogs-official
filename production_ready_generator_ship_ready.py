@@ -1,9 +1,10 @@
-# production_ready_generator_ship_ready_v4.py
+# production_ready_generator_ship_ready_v5.py
 # Daily posting to Webflow with Supabase state
 # - TRUE dedupe by rank (persisted)
 # - One-time seeding of posted_ranks from prior posts
-# - Extra Webflow slug-exists guard before posting
-# - File fallbacks for all state
+# - Correct Webflow v2 slug lookup (?slug=)
+# - Extra pre-post slug guard
+# - File fallbacks for all state, and silent fallback if state_data 404s
 
 import json
 import requests
@@ -24,9 +25,9 @@ except Exception:
     pass  # Py<3.7 fallback
 
 REQUIRED_ENV_VARS = ['WEBFLOW_API_TOKEN', 'WEBFLOW_SITE_ID', 'WEBFLOW_COLLECTION_ID']
-missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
-if missing:
-    raise ValueError(f"🔐 CRITICAL: Missing required environment variables: {', '.join(missing)}")
+_missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if _missing:
+    raise ValueError(f"🔐 CRITICAL: Missing required environment variables: {', '.join(_missing)}")
 
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY')
@@ -37,7 +38,7 @@ WEBFLOW_COLLECTION_ID = os.getenv('WEBFLOW_COLLECTION_ID')
 COLLECTION_PATH = os.getenv("WEBFLOW_COLLECTION_PATH", "fantasy-football-updates")
 
 # Optional exclusions
-EXCLUDE_TOP_N = int(os.getenv("EXCLUDE_TOP_N", "0"))      # e.g., 9
+EXCLUDE_TOP_N = int(os.getenv("EXCLUDE_TOP_N", "0"))      # e.g., 9 to skip ranks 1..9
 EXCLUDE_RANKS_ENV = os.getenv("EXCLUDE_RANKS", "")        # e.g., "1,2,3,11,13"
 EXCLUDE_RANKS_EXTRA = set()
 if EXCLUDE_RANKS_ENV.strip():
@@ -210,6 +211,9 @@ class ProductionBlogGenerator:
             'Accept': 'application/json'
         }
 
+        # If state_data table is missing, we'll silently fallback to files after first 404
+        self._state_data_writes_disabled = False
+
         if HAS_SUPABASE:
             self.init_supabase_state()
 
@@ -277,6 +281,9 @@ class ProductionBlogGenerator:
         return set()
 
     def save_content_hashes_to_supabase(self):
+        if self._state_data_writes_disabled or not HAS_SUPABASE:
+            self.save_content_hashes_to_file()
+            return
         try:
             payload = {
                 'key': 'content_hashes',
@@ -289,7 +296,11 @@ class ProductionBlogGenerator:
                 json=payload, timeout=30
             )
             if r.status_code not in (200, 201):
-                print(f"⚠️ Failed to save content hashes: {r.status_code}")
+                if r.status_code == 404:
+                    self._state_data_writes_disabled = True
+                    print("ℹ️ state_data not found; falling back to file for state (suppressing further warnings).")
+                else:
+                    print(f"⚠️ Failed to save content hashes: {r.status_code}")
                 self.save_content_hashes_to_file()
         except Exception as e:
             print(f"⚠️ Error saving content hashes: {e}")
@@ -382,6 +393,9 @@ class ProductionBlogGenerator:
         return {}
 
     def save_used_anchors_to_supabase(self):
+        if self._state_data_writes_disabled or not HAS_SUPABASE:
+            self.save_used_anchors_to_file()
+            return
         try:
             payload = {'key': 'used_anchors', 'data': self.used_anchors, 'updated_at': datetime.now(timezone.utc).isoformat()}
             r = requests.post(
@@ -390,7 +404,11 @@ class ProductionBlogGenerator:
                 json=payload, timeout=30
             )
             if r.status_code not in (200, 201):
-                print(f"⚠️ Failed to save used anchors: {r.status_code}")
+                if r.status_code == 404:
+                    self._state_data_writes_disabled = True
+                    print("ℹ️ state_data not found; falling back to file for state (suppressing further warnings).")
+                else:
+                    print(f"⚠️ Failed to save used anchors: {r.status_code}")
                 self.save_used_anchors_to_file()
         except Exception as e:
             print(f"⚠️ Error saving used anchors: {e}")
@@ -425,7 +443,7 @@ class ProductionBlogGenerator:
         return set()
 
     def save_posted_ranks_to_supabase(self):
-        if not HAS_SUPABASE:
+        if self._state_data_writes_disabled or not HAS_SUPABASE:
             self.save_posted_ranks_to_file()
             return
         try:
@@ -440,7 +458,11 @@ class ProductionBlogGenerator:
                 json=payload, timeout=30
             )
             if r.status_code not in (200, 201):
-                print(f"⚠️ Failed to save posted_ranks to Supabase: {r.status_code}")
+                if r.status_code == 404:
+                    self._state_data_writes_disabled = True
+                    print("ℹ️ state_data not found; falling back to file for state (suppressing further warnings).")
+                else:
+                    print(f"⚠️ Failed to save posted_ranks: {r.status_code}")
                 self.save_posted_ranks_to_file()
         except Exception as e:
             print(f"⚠️ Error saving posted_ranks to Supabase: {e}")
@@ -460,7 +482,7 @@ class ProductionBlogGenerator:
         those ranks into posted_ranks. Idempotent.
         """
         try:
-            # Heuristic: if posted_ranks already covers at least half of known posted names, skip
+            # If posted_ranks already covers at least half of known posted names, skip
             if len(self.posted_players) == 0 or len(self.posted_ranks) >= max(1, len(self.posted_players) // 2):
                 return
 
@@ -544,15 +566,40 @@ class ProductionBlogGenerator:
                 else:
                     raise
 
-    def _get_item_by_slug(self, slug):
+    # ----- Webflow item lookups (v2 uses ?slug=) -----
+    def slug_exists(self, slug: str) -> bool:
+        """Exact slug check for Webflow API v2 using ?slug=."""
         try:
+            q = requests.utils.quote(slug)
             r = self._get(
-                f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items?limit=1&filter[slug]={slug}',
+                f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items?slug={q}',
                 self.webflow_headers
             )
             if r and r.status_code == 200:
                 items = r.json().get('items', [])
-                return items[0] if items else None
+                # verify exact match in payload (defensive for API variants)
+                for it in items:
+                    fd = (it.get('fieldData') or {})
+                    if fd.get('slug') == slug or it.get('slug') == slug:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _get_item_by_slug(self, slug):
+        """Return the item dict for an exact slug (or None) via ?slug=."""
+        try:
+            q = requests.utils.quote(slug)
+            r = self._get(
+                f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items?slug={q}',
+                self.webflow_headers
+            )
+            if r and r.status_code == 200:
+                items = r.json().get('items', [])
+                for it in items:
+                    fd = (it.get('fieldData') or {})
+                    if fd.get('slug') == slug or it.get('slug') == slug:
+                        return it
         except Exception:
             pass
         return None
@@ -645,18 +692,6 @@ class ProductionBlogGenerator:
             slug = f"{base_slug}-{i}"
         return f"{base_slug}-{int(time.time())}"
 
-    def slug_exists(self, slug):
-        try:
-            r = self._get(
-                f'https://api.webflow.com/v2/collections/{WEBFLOW_COLLECTION_ID}/items?limit=1&filter[slug]={slug}',
-                self.webflow_headers
-            )
-            if r.status_code == 200:
-                return len(r.json().get('items', [])) > 0
-        except Exception:
-            pass
-        return False
-
     def comparable_delta_enhanced(self, base_player, comp_player):
         deltas = []
         for field, label in [
@@ -696,7 +731,7 @@ class ProductionBlogGenerator:
         pos = me.get('position','Unknown')
         comps = []
         for p in all_players:
-            if p.get('name') == me.get('name'): 
+            if p.get('name') == me.get('name'):
                 continue
             if p.get('position') != pos:
                 continue
@@ -1143,7 +1178,7 @@ class ProductionBlogGenerator:
                     failed.append(f"#{player_rank} {player_name} (duplicate content)")
                     continue
 
-                # ⛔ HARD NO-DUP GUARD: if slug already exists, mark rank posted and skip
+                # ⛔ HARD NO-DUP GUARD: if slug already exists (exact), mark rank posted and skip
                 slug_to_check = blog_data['fieldData_raw'].get('slug')
                 if slug_to_check and self.slug_exists(slug_to_check):
                     print(f"⛔ Already exists in Webflow: {slug_to_check} — marking rank as posted and skipping")
@@ -1152,19 +1187,17 @@ class ProductionBlogGenerator:
                     canon = self._canon(player_name)
                     if canon not in self.posted_players:
                         self.posted_players.append(canon)
-                    # continue to next player
                     continue
 
                 if not blog_data['should_index']:
                     data_skipped += 1
                     print(f"⚠️ Data completeness issue: Skipping #{player_rank} {player_name}")
-                    # still mark posted to avoid retry loops? No — keep it available for later if data improves.
+                    # keep available for later if data improves
                     continue
 
                 delay = random.randint(1, 4) if i > 0 else 0
                 if self.post_to_webflow_enhanced(blog_data, delay):
                     successful += 1
-                    # mark by rank immediately (prevents re-pick if process dies later)
                     self.posted_ranks.add(player_rank)
                     self.save_posted_ranks_to_supabase()
 
@@ -1192,12 +1225,11 @@ class ProductionBlogGenerator:
         print(f"🔄 Remaining (est): {est_remaining}")
         if failed:
             print(f"❌ Failed items: {', '.join(failed)}")
-        print("\n🎯 Features: true rank dedupe • seeded history • slug guard • SEO • file fallbacks")
+        print("\n🎯 Features: true rank dedupe • seeded history • correct ?slug= guard • SEO • file fallbacks")
 
     # ----- Data fetch -----
     def fetch_detailed_player_data(self, player_name):
         try:
-            # ilike %...% with safe encoding
             qname = requests.utils.quote(player_name)
             player_resp = requests.get(
                 f'{SUPABASE_URL}/rest/v1/players?name=ilike.%25{qname}%25',
@@ -1233,16 +1265,16 @@ if __name__ == "__main__":
     import argparse
 
     print("🔍 DEBUG: Starting main script...")
-    parser = argparse.ArgumentParser(description='DAILY production blog posting to Webflow with Supabase state (true dedupe by rank + seeding + slug guard)')
+    parser = argparse.ArgumentParser(description='DAILY production blog posting to Webflow with Supabase state (true dedupe + seeded history + Webflow v2 slug guard)')
     parser.add_argument('--posts', type=int, default=9, help='Posts per day (default: 9)')
     parser.add_argument('--test', action='store_true', help='Test mode')
     args = parser.parse_args()
     print(f"🔍 DEBUG: Args parsed: posts={args.posts}, test={args.test}")
 
-    print("🛡️ DAILY Production Blog Generator v4")
+    print("🛡️ DAILY Production Blog Generator v5")
     print("✅ True dedupe by rank (persisted)")
     print("✅ Backfill posted_ranks from history")
-    print("✅ Slug-exists guard before post")
+    print("✅ Webflow v2 slug guard (?slug=)")
     print("✅ SEO + JSON-LD + hub links")
     print("🔐 Env validated")
 
